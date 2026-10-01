@@ -7,6 +7,10 @@
     path, this captures real screen pixels (images, widgets, overlays, other windows).
     Requires the plugin to be installed and the DSH web UI to be running.
 
+    Superseded (2026-10-01): the PC Actor (actor/) captures the same pixels with no plugin
+    and no DSH server — `actor\act.cmd '{"op":"shot","path":"shot.png"}'`. This script stays
+    for setups that already run the plugin bundle.
+
 .EXAMPLE
     pwsh -File tools/dsh-look-native.ps1
     pwsh -File tools/dsh-look-native.ps1 -Port 3080 -Json

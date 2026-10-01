@@ -3,6 +3,62 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [SemVer](https://semver.org/).
 
+## [1.2.0] — 2026-10-01
+
+The resident **PC Actor**: the toolkit stops paying for a process per action, and the docs
+now say which generation is which.
+
+### Added
+
+- `actor/` — a long-lived automation daemon on `127.0.0.1:8731`, one JSON line per request:
+  - `actor.py` — GDI screen grab (cached DC), `SendInput` hands with optional human-like
+    easing, UIA structure lookups, pixel fallback (per-row colour runs, vectorised ZNCC
+    pyramid template match), the op table (`ping shot save find click move drag type key
+    scroll uia window wait_for watch log bench run stop`) and a `run` op that executes a
+    whole skill in one call with per-step timings.
+  - `act.py` — stdlib-only client that boots the daemon on demand (0.4 s).
+  - `actor.ps1` / `act.cmd` — `-Setup` (provision `comtypes` into the actor HOME),
+    `-Where`, `-Start`, `-Stop`, `-Status`, `-Bench`, `-Send`, `-Tail`.
+  - `skills/demo_calc.py`, `tests/dirty_calc.py`, `tests/probe_uia.py`.
+- `op window` — `front` (restore + raise + pin so `SendInput` lands), `top` / `untop`,
+  `info`, `max` / `min` / `restore` / `move` / `close`.
+- Docs restructure: both READMEs lead with the actor and mark the superseded pieces
+  (`tools/gui-steps.ps1`, `tools/template_match.py`, `tools/dsh-look-native.ps1`, the
+  selflook plugin) instead of advertising them as the way to work.
+
+### Measured
+
+| Step | Before | Now |
+|---|---|---|
+| Cost of one step | 2–4 s (new shell + cold Python per action) | **40–140 ms** |
+| Whole skill (launch Calculator → `7*8` → read 56 → `12+30` → read 42) | minutes, dozens of calls | **0.62 s** warm / **1.4 s** cold, **0 pixel reads** |
+| List top-level windows (name/class/hwnd/rect) | 2–4 s | **41 ms** |
+| Click / type / key | 1–2 s / 2–4 s / 1–2 s | **~120 ms / 50 ms / 54 ms** |
+| UIA root / find control | 1–3 s | **0.35–2.6 ms / 59 ms** |
+| Full-screen colour blobs | 1113 ms | **110 ms** (merge with the previous row only) |
+| Full-screen 60×60 template match | 573 ms | **91 ms** (vectorised `sliding_window_view` + ZNCC pyramid) |
+| Protocol round trip / client start-up | — | **12 ms / 107 ms** |
+
+### Fixed
+
+- UIA `FindAll` was called with `TreeScope_Element` (1) instead of `TreeScope_Descendants`
+  (4) and silently returned zero results.
+- UIA COM objects created on an MTA thread raised `RPC_E_CHANGED_MODE`; they are now owned
+  by one long-lived STA worker with a per-call timeout, so a hung target app cannot hang
+  the actor.
+- `SendInput` only reaches the **focused** window, so a skill could type into the wrong app
+  and read a stale value (the Calculator still showing the previous result). Skills now
+  raise + pin the target, clear with Esc, poll the structure channel, and close the window
+  at the end; `tests/dirty_calc.py` reproduces the old failure on purpose.
+
+### Notes
+
+- Actor state (logs, `port.txt`, deps, temp) lives outside the checkout: `$ACTOR_HOME` →
+  `actor/home.txt` → code dir.
+- Nothing here is novel research: UIA, `SendInput`, ZNCC matching and OCR are the standard
+  desktop-automation ingredients; the shape (resident engine + one call per skill) follows
+  RPA agents, CDP and Appium.
+
 ## [1.1.0] — 2026-10-01
 
 GUI automation: the toolkit now drives a real desktop instead of only measuring it.

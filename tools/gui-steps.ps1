@@ -1,5 +1,11 @@
 # gui-steps.ps1 — plan-driven desktop GUI driver (mouse / keys / clipboard / screenshot / template match)
 #
+# SUPERSEDED (2026-10-01) by actor/ — the resident PC Actor does the same job from a warm
+# process: UIA structure lookups instead of pixel matching where possible, 40-140 ms per
+# step, and one `run` call per skill with per-step timings. This file is kept as the
+# reference implementation of the "one process per interaction" idea and because
+# docs/界面自动化日志.md documents it. New work should use the actor.
+#
 # A JSON plan drives a sequence of steps in ONE PowerShell process, so a whole
 # interaction (raise window -> click -> type -> verify) costs one process start
 # instead of one per action. Steps: focus | top | rect | move | click | press |

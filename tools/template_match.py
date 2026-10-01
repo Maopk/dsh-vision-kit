@@ -1,5 +1,10 @@
 """Pixel-only element localization by multi-scale normalized cross-correlation.
 
+Superseded for full-screen work (2026-10-01) by the PC Actor's `find` op, which runs the
+same ZNCC pyramid inside a warm process: ~91 ms for a full 2560x1600 frame against ~573 ms
+for a cold start of this script. Kept as the standalone CLI for one-off measurements and
+because tests/score-pipeline.ps1 scores it against ground truth.
+
 Honest framing of why this method is used: the two unsupervised methods in
 cv_ui_geometry.py both failed on this interface —
   * long-line detection found ZERO borders: DSH panels differ from the background

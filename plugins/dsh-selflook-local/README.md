@@ -1,5 +1,11 @@
 # dsh-selflook-local (native-capture fork)
 
+> **Status: not installed by default, and no longer the primary capture path.** The
+> `actor/` daemon in this repo captures the same screen pixels with no plugin, no DSH
+> server and no bundle entry (`act.cmd '{"op":"shot","path":"shot.png"}'`), and it is the
+> path everything else now assumes. Install this plugin only if you specifically want the
+> in-browser `shot` RPC.
+
 Lets a DSH agent look at the screen. Two capture paths, and the difference matters:
 
 | | `native` | `dom` |
