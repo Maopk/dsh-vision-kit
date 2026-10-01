@@ -14,8 +14,15 @@ import json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from act import send                                            # noqa: E402
 
+try:                                    # keep Chinese element names readable on a GBK console
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
 AID = 'CalculatorResults'
 PKG = r'shell:appsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
+NAV = ('打开导航', 'Open navigation', 'Navigation')
+STANDARD = ('标准', 'Standard', '标准计算器', 'Standard Calculator')
 
 
 def timed(label, req, echo=True):
@@ -44,6 +51,54 @@ def find_window(timeout=20.0):
 def find_el(hwnd, aid=AID):
     rep = send({'op': 'uia', 'what': 'find', 'selector': {'hwnd': hwnd, 'aid': aid}, 'max': 1})
     return (rep['hits'][0] if rep.get('n') else None), rep
+
+
+def find_by_name(hwnd, names, ctype=None):
+    """First element whose name is one of `names` (exact match wins over 'contains')."""
+    for name in names:
+        sel = {'hwnd': hwnd, 'name': name}
+        if ctype:
+            sel['ctype'] = ctype
+        rep = send({'op': 'uia', 'what': 'find', 'selector': sel, 'max': 5})
+        if rep.get('n'):
+            return rep['hits'][0]
+    return None
+
+
+def pane_items(hwnd, timeout=2.0):
+    """Navigation-pane entries (the mode names) are ListItems - poll until they show up."""
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < timeout:
+        rep = send({'op': 'uia', 'what': 'find', 'selector': {'hwnd': hwnd, 'ctype': 'ListItem'}, 'max': 20})
+        items = [h for h in (rep.get('hits') or []) if h.get('name')]
+        if items:
+            return items
+        time.sleep(0.15)
+    return []
+
+
+def ensure_standard(hwnd, timeout=8.0):
+    """The Calculator restores whatever mode it was last in, and graphing mode has no
+    CalculatorResults - so walk the navigation pane back to Standard, structurally."""
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        el, _ = find_el(hwnd)
+        if el:
+            return True, 'Standard (display element present)'
+        nav = find_by_name(hwnd, NAV)
+        if not nav:
+            return False, 'no navigation button - unknown layout'
+        send({'op': 'click', 'target': {'uia': {'selector': {'hwnd': hwnd, 'name': nav['name']}}}, 'front': hwnd})
+        for it in pane_items(hwnd):
+            nm = (it.get('name') or '').strip()
+            if any(s.lower() in nm.lower() for s in STANDARD):
+                send({'op': 'click', 'target': {'uia': {'selector': {'hwnd': hwnd, 'name': it['name']}}}, 'front': hwnd})
+                time.sleep(0.4)
+                break
+        else:
+            time.sleep(0.3)
+    el, _ = find_el(hwnd)
+    return bool(el), ('switched to Standard' if el else 'could not reach Standard in %ss' % timeout)
 
 
 def read_display(hwnd):
@@ -77,6 +132,9 @@ def main():
         return 1
     hwnd = win['hwnd']
     print('  window after %sms: name=%r cls=%s hwnd=%s rect=%s' % (waited, win['name'], win['cls'], hwnd, win['rect']))
+    t0 = time.perf_counter()
+    mode_ok, why = ensure_standard(hwnd)
+    print('  standard mode (%sms): %s - %s' % (round((time.perf_counter() - t0) * 1000, 1), mode_ok, why))
     el, _ = find_el(hwnd)
     print('  display element: %s' % json.dumps(el, ensure_ascii=False))
 

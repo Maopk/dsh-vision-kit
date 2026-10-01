@@ -31,6 +31,8 @@ actor/                     ← 代码（可提交、可搬走）
   skills/demo_calc.py 验证技能：纯结构通道驱动计算器并读回结果
   tests/probe_uia.py  裸 UIA 探针（排查 UIA 行为时用）
   tests/dirty_calc.py 把计算器弄成「脏状态」并留着不关，用来验证 demo 的确定性
+  tests/bench_fast.py 快循环基准：state / probe / run / front / 批量输入 逐项耗时
+  tests/verify_type.py 证明批量输入照样落字：150、500 字符 + 像素 diff + ASCII 墨迹图
   .gitignore          把 home.txt / 日志 / png 挡在 git 外
 
 D:\DSH\dsh-actor\          ← HOME（机器本地，不提交）
@@ -60,7 +62,9 @@ python actor\skills\demo_calc.py
 | op | 说明 |
 |---|---|
 | `ping` | pid / uptime / 屏幕几何 / DPI / python 版本 |
-| `shot` `save` | 抓帧（`path`、`region`），带 `frame_id` 缓存 |
+| `shot` `save` | 抓帧（`path`、`region`），带 `frame_id` 缓存（只要像素结论时**优先 `probe`**，别拉 PNG） |
+| `state` | **一次调用 = 整张桌面摘要**：前台窗口 + 顶层窗口表（名字截断 70 字符、矩形），`uia:true` 再加该窗口的**具名元素平表**（`scanned`/`n`/`items`，默认上限 60）——替代几百 KB 的 `tree` dump |
+| `probe` | **在 actor 里做像素账、只回文本**（不落盘、不传图）：`colors` 主色 + 每色 bbox、`grid` 每格平均色、`ink` ASCII 墨迹图、`mark` 存基线、`diff` 与基线比（`changed_px`/`pct`/`bbox`；**基线不覆盖**，可反复 diff） |
 | `find` | `image`/`template`(+`tmpl_rect`) 模板匹配；`color`+`tol`+`min_area` 连通域；`uia`+`selector` 控件查找 |
 | `click` `move` `drag` | 目标可以是 `xy`、`uia` 选择器（点元素中心）、`color`/`template` 命中 |
 | `type` `key` `scroll` | 文本、键名（enter/esc/tab/ctrl+z…）、滚轮 |
@@ -73,6 +77,8 @@ python actor\skills\demo_calc.py
 
 `run` 是省往返的关键：一个技能 = 一次调用，返回逐步 trace。
 
+任何输入 op（`click`/`move`/`type`/`key`/`drag`）都能带 `front=<hwnd>` 或 `front_title=<子串>`：先抢前台（默认顺手置顶钉住）再动作，并把 `front` 的结果带回来。`click` 默认**不再做 100 ms 人手缓动**（要旧行为传 `ease:true`）；`type` 传 `per_char_ms:0` 就是**整串一次性 SendInput**（遇到丢字的 app 用 `chunk:40` 分批）；`uia` 的 `what:"tree"` 加 `compact:true` 直接给平表而不是整棵树。
+
 ## 实测（2560×1600，本机）
 
 | 动作 | 旧的「一次工具往返」 | 现在 |
@@ -80,7 +86,12 @@ python actor\skills\demo_calc.py
 | 全屏抓帧 | 1 次往返 + 落盘 | **46 ms** |
 | 列全部顶层窗口（名字/类/hwnd/矩形） | 2–4 s | **48 ms** |
 | 按 aid/name/类型找控件（36 个按钮） | 1–3 s | **59 ms** |
-| 点击（含人手缓动 100 ms） | 1–2 s | **~120 ms** |
+| 点击（自动抢前台，无人手缓动） | 1–2 s | **33–46 ms**（旧的缓动版 120 ms） |
+| 桌面摘要（前台 + 顶层窗口表） | 2–4 s | **45–92 ms** |
+| 具名元素平表（扫 109 节点 → 41 个具名） | 数秒 + 300 KB | **155–196 ms，几百字节** |
+| 像素结论：主色+bbox / 全屏 diff / 墨迹图 | 1 次往返 + 落盘 + PIL 载入 ≈ 1 s | **63–194 ms**（600×400 主色 63、全屏 194、diff 129、墨迹 86） |
+| 输入 150 字符 | 2–4 s | **72 ms**（逐字 12 ms 的旧路径 1 956 ms） |
+| 四步交互（mark → 输 150 字 → 等 0.4 s → diff）一次调用 | 4 次往返 4–12 s | **622 ms** |
 | 输入 `7*8` | 2–4 s | **50 ms** |
 | 按 Enter | 1–2 s | **54 ms** |
 | 整屏颜色连通域 | 1.1 s | **102 ms** |
@@ -88,6 +99,23 @@ python actor\skills\demo_calc.py
 | **整段技能：启动计算器 → `7*8=` → 读回 56 → `12+30` → 按名字点「等于」→ 读回 42** | — | **0.62–0.72 s（含启动 App），像素读取 0 次** |
 
 三个配套改动让它确定：`window front` 抢前台（SendInput 只会发给有焦点的窗口）→ `key esc` 清空残留输入 → `wait_display` 轮询结构通道而不是盲等 → 结尾 `window close` 让下次从干净状态开始。`tests/dirty_calc.py` 专门把计算器弄成脏状态（残留显示 42）留着不关，用来证明 demo 从脏状态照样 PASS。
+
+## 快循环：一次调用跑完「看 → 动 → 验」
+
+```json
+{"op":"run","steps":[
+  {"op":"state","uia":true,"title_contains":"Notepad"},
+  {"op":"probe","mode":"mark","region":[1606,299,2313,1406]},
+  {"op":"type","text":"hello","per_char_ms":0,"front":1443004},
+  {"op":"sleep","ms":300},
+  {"op":"probe","mode":"diff","region":[1606,299,2313,1406]}
+]}
+```
+
+一个 `run` = 一次往返；`probe` 的结论是几行文本，而不是几百 KB 的 PNG；`front=` 保证 SendInput 落在目标窗口上。
+同样的「读状态 → 输入 150 字符 → 校验」，从 4 次调用 ≈ 6 s 降到 **622 ms**（`tests/verify_type.py` 里有 A/B 对照与墨迹图）。
+
+慢的从来不是鼠标（一次点击 33–46 ms），而是**编排**：每步新起 pwsh + 冷启 python + 截一张图 + 盲等。
 
 ## 写一个技能
 
@@ -122,6 +150,12 @@ python actor\skills\demo_calc.py
 6. **模板要有纹理**：纯色模板会在一堆位置拿满分（score 0），返回的位置没有意义。
 7. **视觉通道要向量化**：连通域别写成 O(R²) 的 run 两两比较，模板匹配别用 Python 双层循环扫全屏
    —— 降采样金字塔 + `sliding_window_view` 是 7–11 倍。
+8. **App 的状态会跨运行保留**：计算器会记住上次用的模式，而「绘图」模式里**根本没有**
+   `CalculatorResults` —— demo 就这么在「应用没坏、脚本没坏」的情况下失败了。技能的第一步必须是
+   **把 app 恢复到它期望的状态**（`ensure_standard()` 走导航面板点回「标准」）。顺带一坑：面板项是
+   `ListItem`，名字是「标准 计算器」「绘图 计算器」这种带后缀的串，**必须按子串匹配**，精确匹配找不到。
+9. **`type` 快不等于 app 收得下**：一次性 SendInput 批次在记事本、计算器上都稳（150 字 72 ms、500 字 332 ms），
+   但遇到丢字的 app 要退到 `chunk:40` 分批 —— 快路径必须是「可退化的」，不是「二选一」。
 
 ## 与 dsh-vision-kit 的关系
 

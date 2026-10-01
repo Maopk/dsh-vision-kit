@@ -8,8 +8,16 @@ the entry with Esc. Run:  python tests/dirty_calc.py
 """
 import os, re, subprocess, sys, time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'skills'))
 from act import send                                            # noqa: E402
+from demo_calc import ensure_standard, read_display, wait_display   # noqa: E402
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 AID = 'CalculatorResults'
 PKG = r'shell:appsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
@@ -25,14 +33,6 @@ def window(timeout=20.0):
     return None
 
 
-def display(hwnd):
-    rep = send({'op': 'uia', 'what': 'find', 'selector': {'hwnd': hwnd, 'aid': AID}, 'max': 1})
-    if not rep.get('n'):
-        return None
-    m = re.findall(r'-?[\d,]+(?:\.\d+)?', rep['hits'][0].get('name') or '')
-    return m[-1].replace(',', '') if m else None
-
-
 def main():
     subprocess.Popen('explorer.exe "%s"' % PKG, shell=True)
     w = window()
@@ -40,16 +40,18 @@ def main():
         print('FAIL: no calculator window')
         return 1
     hwnd = w['hwnd']
+    mode_ok, why = ensure_standard(hwnd)
+    print('calculator mode: %s - %s' % (mode_ok, why))
     send({'op': 'window', 'mode': 'front', 'hwnd': hwnd})
     send({'op': 'window', 'mode': 'top', 'hwnd': hwnd})
     send({'op': 'click', 'target': {'uia': {'selector': {'hwnd': hwnd, 'aid': AID}}}})
     send({'op': 'key', 'key': 'esc'})
     send({'op': 'type', 'text': '6*7'})
     send({'op': 'key', 'key': 'enter'})
-    time.sleep(0.4)
+    val, raw, ms = wait_display(hwnd, '42', timeout=3.0)
     send({'op': 'window', 'mode': 'untop', 'hwnd': hwnd})
-    val = display(hwnd)
-    print('left the calculator OPEN showing %s (hwnd=%s) - now run skills/demo_calc.py' % (val, hwnd))
+    print('left the calculator OPEN showing %s after %sms (hwnd=%s) - now run skills/demo_calc.py'
+          % (val, ms, hwnd))
     return 0 if val == '42' else 1
 
 

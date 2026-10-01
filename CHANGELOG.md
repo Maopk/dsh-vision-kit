@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [SemVer](https://semver.org/).
 
+## [1.3.0] — 2026-10-01
+
+The **fast loop**: the daemon stops handing back PNGs and tree dumps, and every input op can raise
+its own target window — one `run` call now covers look → act → verify.
+
+### Added
+
+- `op state` — one call returns the foreground window plus every top-level window (name truncated to
+  70 chars + rect); `uia:true` adds a flat list of **named elements with rects** instead of a tree dump.
+- `op probe` — pixel accounting **inside** the actor with text-only results: `colors` (dominant
+  colours, each with a bbox), `grid`, `ink` (ASCII ink map), `mark` + `diff` (baseline kept, so a
+  region can be diffed repeatedly). No file, no PNG, no PIL on the client side.
+- `front=<hwnd>` / `front_title=<substring>` on every input op (`click` / `move` / `type` / `key` /
+  `drag`): raise (and pin) the target first, then act — `SendInput` only reaches the focused window.
+- `uia {what:"tree", compact:true}` — flat named-element list instead of the full tree.
+- `tests/bench_fast.py`, `tests/verify_type.py`.
+
+### Changed
+
+- `click` no longer eases the pointer by default (24 `SetCursorPos` steps ≈ 100 ms); pass `ease:true`
+  for the old behaviour. Real clicks are **33–46 ms**.
+- `type` accepts `per_char_ms: 0` → the whole string goes out as **one SendInput batch** (72 ms for
+  150 chars; `chunk:40` when an app drops input). The per-character path (12 ms/char) stays the default.
+- `move` defaults to `human=false`; `windows` returns only hwnd/name/class/type/rect.
+- `skills/demo_calc.py` / `tests/dirty_calc.py` first **restore the app's expected state**:
+  `ensure_standard()` walks the Calculator's navigation pane back to Standard, because the app
+  remembers its last mode and graphing mode has no `CalculatorResults` — which is exactly how the
+  demo failed while nothing was actually broken. `dirty_calc` also polls the display instead of sleeping.
+
+### Measured
+
+| Step | Before (1.2.0) | Now |
+|---|---|---|
+| Desktop summary (foreground + windows) | 2–4 s (shell + dump) | **45–92 ms** |
+| Named element list (109 scanned → 41 named) | seconds + 300 KB | **155–196 ms, a few hundred bytes** |
+| Pixel verdict (colours / full-screen diff / ink map) | 1 round trip + file + PIL ≈ 1 s | **63–194 ms** |
+| Click | ~120 ms | **33–46 ms** |
+| Type 150 chars | 1 956 ms (12 ms/char) | **72 ms** (1 504 chars/s sustained) |
+| Look → type 150 → verify, one call | 4 calls ≈ 6 s | **622 ms** |
+
 ## [1.2.0] — 2026-10-01
 
 The resident **PC Actor**: the toolkit stops paying for a process per action, and the docs

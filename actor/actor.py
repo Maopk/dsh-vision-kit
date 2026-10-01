@@ -261,10 +261,17 @@ class Hands:
             return {'from': [x0, y0], 'to': [int(x), int(y)], 'steps': steps,
                     'ms': round((time.perf_counter() - t0) * 1000, 1)}
 
-    def click(self, x=None, y=None, button='left', n=1, gap_ms=60):
+    def click(self, x=None, y=None, button='left', n=1, gap_ms=60, ease=False, settle_ms=25):
+        """ease=False teleports the cursor instead of gliding there (~100 ms saved per
+        click); keep ease=True only for hover-sensitive UI."""
         with self.lock:
             if x is not None:
-                self.move_unlocked(x, y)
+                if ease:
+                    self.move_unlocked(x, y)
+                else:
+                    self.u.SetCursorPos(int(x), int(y))
+                    if settle_ms:
+                        time.sleep(settle_ms / 1000.0)
             down = {'left': LDOWN, 'right': RDOWN, 'middle': MDOWN}[button]
             up = {'left': LUP, 'right': RUP, 'middle': MUP}[button]
             t0 = time.perf_counter()
@@ -333,8 +340,25 @@ class Hands:
             time.sleep(0.02)
         return {'ms': round((time.perf_counter() - t0) * 1000, 1), 'keys': list(names)}
 
-    def type_text(self, text, per_char_ms=12):
+    def type_text(self, text, per_char_ms=12, chunk=0):
+        """per_char_ms=0 sends the whole string as ONE SendInput batch (~70 ms for 150
+        chars instead of ~1.8 s of per-character sleeps). Some apps drop keystrokes that
+        arrive in one burst - then pass chunk=40 to send it in 40-char bursts."""
         t0 = time.perf_counter()
+        if per_char_ms <= 0:
+            groups = [text] if not chunk else [text[i:i + int(chunk)] for i in range(0, len(text), int(chunk))]
+            for g in groups:
+                items = []
+                for ch in g:
+                    code = ord(ch)
+                    items.append(self._ki(0, code, UNICODE))
+                    items.append(self._ki(0, code, UNICODE | KEYUP))
+                if items:
+                    self._send(items)
+                if len(groups) > 1:
+                    time.sleep(0.004)
+            return {'ms': round((time.perf_counter() - t0) * 1000, 1), 'chars': len(text),
+                    'mode': 'batch', 'chunks': len(groups)}
         for ch in text:
             code = ord(ch)
             self._send([self._ki(0, code, UNICODE), self._ki(0, code, UNICODE | KEYUP)])
@@ -579,7 +603,8 @@ def windows(client, UIA, limit=60):
         while c is not None and len(out) < limit:
             info = el_info(c, UIA)
             if info['type'] == 'Window' or (info['rect'] and info['rect'][2] - info['rect'][0] > 120):
-                out.append(info)
+                out.append({'hwnd': info['hwnd'], 'name': info['name'], 'cls': info['cls'],
+                            'type': info['type'], 'rect': info['rect']})
             try:
                 c = walker.GetNextSiblingElement(c)
             except Exception:
@@ -919,23 +944,33 @@ def o_find(req):
 @op('click')
 def o_click(req):
     t0 = time.perf_counter()
+    fr = _maybe_front(req)
     pos, how = resolve_target(req.get('target'), A)
-    r = A.hands.click(pos[0], pos[1], req.get('button', 'left'), int(req.get('n', 1)), req.get('gap_ms', 60))
-    return {'ok': True, 'at': pos, 'how': how, 'click': r, 'ms': round((time.perf_counter() - t0) * 1000, 1)}
+    r = A.hands.click(pos[0], pos[1], req.get('button', 'left'), int(req.get('n', 1)), req.get('gap_ms', 60),
+                      req.get('ease', False), req.get('settle_ms', 25))
+    out = {'ok': True, 'at': pos, 'how': how, 'click': r, 'ms': round((time.perf_counter() - t0) * 1000, 1)}
+    if fr:
+        out['front'] = fr
+    return out
 
 
 @op('move')
 def o_move(req):
+    fr = _maybe_front(req)
     if req.get('target'):
         pos, how = resolve_target(req['target'], A)
     else:
         pos, how = [int(req['x']), int(req['y'])], {'how': 'xy'}
-    return {'ok': True, 'at': pos, 'how': how, 'move': A.hands.move(pos[0], pos[1], req.get('dur_ms', 160),
-                                                                    req.get('human', True))}
+    out = {'ok': True, 'at': pos, 'how': how,
+           'move': A.hands.move(pos[0], pos[1], req.get('dur_ms', 160), req.get('human', False))}
+    if fr:
+        out['front'] = fr
+    return out
 
 
 @op('drag')
 def o_drag(req):
+    fr = _maybe_front(req)
     if req.get('from'):
         p1, _ = resolve_target(req['from'], A)
     else:
@@ -945,20 +980,31 @@ def o_drag(req):
     else:
         p2 = [int(req['x2']), int(req['y2'])]
     r = A.hands.drag(p1[0], p1[1], p2[0], p2[1], req.get('steps', 30), req.get('ms', 240), req.get('button', 'left'))
-    return {'ok': True, 'from': p1, 'to': p2, 'drag': r}
+    out = {'ok': True, 'from': p1, 'to': p2, 'drag': r}
+    if fr:
+        out['front'] = fr
+    return out
 
 
 @op('type')
 def o_type(req):
-    return dict(ok=True, **A.hands.type_text(req['text'], req.get('per_char_ms', 12)))
+    fr = _maybe_front(req)
+    out = dict(ok=True, **A.hands.type_text(req['text'], req.get('per_char_ms', 12), req.get('chunk', 0)))
+    if fr:
+        out['front'] = fr
+    return out
 
 
 @op('key')
 def o_key(req):
+    fr = _maybe_front(req)
     keys = req.get('keys') or [req['key']]
     if isinstance(keys, str):
         keys = [keys]
-    return dict(ok=True, **A.hands.key(*keys))
+    out = dict(ok=True, **A.hands.key(*keys))
+    if fr:
+        out['front'] = fr
+    return out
 
 
 @op('scroll')
@@ -988,6 +1034,8 @@ def o_uia(req):
             root = els[0] if els else None
         if root is None:
             root = guarded(lambda: client.GetRootElement(), to)
+        if req.get('compact'):
+            return {'ok': True, **_win_elements(req)}
         out = []
         guarded(lambda: walk(root, UIA, int(req.get('depth', 3)), int(req.get('limit', 300)), out, req.get('view', 'raw')), to)
         return {'ok': True, 'n': len(out), 'tree': [dict(depth=d, **el_info(e, UIA)) for d, e in out]}
@@ -1098,6 +1146,154 @@ def o_wait(req):
 @op('watch')
 def o_watch(req):
     return {'ok': True, **A.start_watch(req.get('on', True), req.get('fps', 6))}
+
+
+# ------------------------------------------------------ fast loop: state / probe
+def _win_info(hwnd):
+    u = ctypes.windll.user32
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return None
+    buf = ctypes.create_unicode_buffer(512)
+    u.GetWindowTextW(wt.HWND(hwnd), buf, 512)
+    cls = ctypes.create_unicode_buffer(256)
+    u.GetClassNameW(wt.HWND(hwnd), cls, 256)
+    r = wt.RECT()
+    u.GetWindowRect(wt.HWND(hwnd), ctypes.byref(r))
+    pid = ctypes.c_ulong()
+    u.GetWindowThreadProcessId(wt.HWND(hwnd), ctypes.byref(pid))
+    return {'hwnd': hwnd, 'title': buf.value, 'cls': cls.value,
+            'rect': [int(r.left), int(r.top), int(r.right), int(r.bottom)],
+            'pid': int(pid.value), 'visible': bool(u.IsWindowVisible(wt.HWND(hwnd)))}
+
+
+def _front(hwnd=None, title_contains=None, top=True, timeout=4.0):
+    r = OPS['window']({'op': 'window', 'mode': 'top' if top else 'front', 'hwnd': hwnd,
+                       'title_contains': title_contains, 'timeout': timeout})
+    return {k: r.get(k) for k in ('hwnd', 'title', 'foreground', 'is_foreground', 'mode') if k in r}
+
+
+def _maybe_front(req):
+    """Input ops may carry front=<hwnd> or front_title=<substring>: raise (and pin) the
+    target first, so DSH stealing the foreground cannot eat the keystrokes."""
+    if req.get('front') is None and not req.get('front_title'):
+        return None
+    return _front(req.get('front'), req.get('front_title'), req.get('front_top', True))
+
+
+def _win_elements(req):
+    """Flat list of the NAMED elements of one window - the compact replacement for a
+    300 KB tree dump."""
+    UIA, client = uia_client()
+    to = req.get('timeout', 5.0)
+    hwnd = req.get('hwnd') or ctypes.windll.user32.GetForegroundWindow()
+    root = guarded(lambda: client.ElementFromHandle(wt.HWND(int(hwnd))), to) if hwnd \
+        else guarded(lambda: client.GetRootElement(), to)
+    seen = []
+    guarded(lambda: walk(root, UIA, int(req.get('depth', 12)), int(req.get('scan', 900)), seen, 'raw'), to)
+    needle, clsf = req.get('name_contains'), req.get('cls_contains')
+    items = []
+    for d, e in seen:
+        i = el_info(e, UIA)
+        if not i['name'] or not i['rect']:
+            continue
+        if needle and needle not in i['name']:
+            continue
+        if clsf and clsf not in (i['cls'] or ''):
+            continue
+        items.append({'d': d, 'name': i['name'][:70], 'aid': i['aid'], 'type': i['type'], 'rect': i['rect']})
+    lim = int(req.get('limit', 60))
+    return {'scanned': len(seen), 'n': len(items), 'items': items[:lim]}
+
+
+@op('state')
+def o_state(req):
+    """One call = the whole desktop digest, small enough to read on every step."""
+    t0 = time.perf_counter()
+    out = {'ok': True, 'foreground': _win_info(ctypes.windll.user32.GetForegroundWindow())}
+    if req.get('windows', True):
+        UIA, client = uia_client()
+        to = req.get('timeout', 4.0)
+        ws = guarded(lambda: windows(client, UIA, req.get('max', 40)), to)
+        out['windows'] = [{'hwnd': w['hwnd'], 'name': (w['name'] or '')[:70], 'rect': w['rect']}
+                          for w in ws if w.get('rect') and w['rect'][2] > w['rect'][0]]
+    if req.get('uia'):
+        out['elements'] = _win_elements(req)
+    out['ms'] = round((time.perf_counter() - t0) * 1000, 1)
+    return out
+
+
+_PROBE = {}
+
+
+def _top_colors(sub, n):
+    q = (((sub[:, :, 0].astype(np.int32) >> 3) << 10) | ((sub[:, :, 1].astype(np.int32) >> 3) << 5)
+         | (sub[:, :, 2].astype(np.int32) >> 3))
+    cnt = np.bincount(q.ravel(), minlength=32768)
+    out = []
+    for b in np.argsort(cnt)[::-1][:n]:
+        if cnt[b] == 0:
+            continue
+        ys, xs = np.nonzero(q == int(b))
+        out.append({'rgb': [int((b >> 10) << 3) + 4, int(((b >> 5) & 31) << 3) + 4, int((b & 31) << 3) + 4],
+                    'n': int(cnt[b]), 'bbox': [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]})
+    return out
+
+
+@op('probe')
+def o_probe(req):
+    """Pixel bookkeeping inside the actor: no PNG round trip, no PIL in the caller.
+
+      mode=colors (top colours) | grid (colour cells) | ink (ASCII map) | mark | diff
+    'mark' stores the region as the baseline, 'diff' compares against it (changed px,
+    ratio, bbox) - one tiny call answers "did my click do anything?".
+    """
+    t0 = time.perf_counter()
+    f = A.ensure(req.get('max_age_ms', 0))
+    x1, y1, x2, y2 = [int(v) for v in (req.get('region') or [0, 0, f.shape[1], f.shape[0]])]
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(f.shape[1], x2), min(f.shape[0], y2)
+    sub = f[y1:y2, x1:x2]
+    out = {'ok': True, 'region': [x1, y1, x2, y2], 'px': int(sub.size // 3), 'frame_id': A.frame_id}
+    mode = req.get('mode', 'colors')
+    if mode == 'mark':
+        _PROBE[(x1, y1, x2, y2)] = sub.copy()
+        out['marked'] = True
+        out['top'] = _top_colors(sub, int(req.get('top', 3)))
+    elif mode == 'diff':
+        base = _PROBE.get((x1, y1, x2, y2))
+        if base is None or base.shape != sub.shape:
+            _PROBE[(x1, y1, x2, y2)] = sub.copy()
+            out.update(first=True, changed_px=0, pct=0.0)
+        else:
+            d = np.abs(sub.astype(np.int16) - base.astype(np.int16)).sum(axis=2)
+            m = d > int(req.get('thr', 60))
+            n = int(m.sum())
+            out.update(changed_px=n, pct=round(n / max(1, m.size), 4))
+            if n:
+                ys, xs = np.nonzero(m)
+                out['bbox'] = [x1 + int(xs.min()), y1 + int(ys.min()), x1 + int(xs.max()) + 1, y1 + int(ys.max()) + 1]
+    elif mode == 'ink':
+        cols, rows = [int(v) for v in (req.get('grid') or [64, 22])]
+        ramp = ' .:-=+*#%@'
+        bg = _top_colors(sub, 1)[0]['rgb']
+        dist = np.abs(sub.astype(np.int16) - np.array(bg, dtype=np.int16)).sum(axis=2)
+        mask = (dist > int(req.get('tol', 60))).astype(np.float32)
+        ch, cw = max(1, sub.shape[0] // rows), max(1, sub.shape[1] // cols)
+        mm = mask[:rows * ch, :cols * cw].reshape(rows, ch, cols, cw).mean(axis=(1, 3))
+        out.update(bg=bg, cell=[cw, ch],
+                   ink='\n'.join(''.join(ramp[min(9, int(v * 22))] for v in row) for row in mm))
+    elif mode == 'grid':
+        cols, rows = [int(v) for v in (req.get('grid') or [16, 8])]
+        ch, cw = max(1, sub.shape[0] // rows), max(1, sub.shape[1] // cols)
+        mm = sub[:rows * ch, :cols * cw].reshape(rows, ch, cols, cw, 3).mean(axis=(1, 3)).astype(int)
+        out['cell'] = [cw, ch]
+        out['grid'] = [' '.join('%02x%02x%02x' % tuple(int(v) for v in px) for px in row) for row in mm]
+        out['top'] = _top_colors(sub, int(req.get('top', 5)))
+    else:
+        out['top'] = _top_colors(sub, int(req.get('top', 6)))
+    out['ms'] = round((time.perf_counter() - t0) * 1000, 1)
+    return out
 
 
 @op('log')
