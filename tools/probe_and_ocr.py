@@ -17,8 +17,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 
-SHOT = Path(r"C:\Users\28794\Downloads\dsh\图片\self-look-2026-10-01T08-17-52-065Z.png")
-OUT = Path(r"C:\Users\28794\dsh-vision-work")
+SHOT = Path.home() / "Downloads" / "dsh" / "图片" / "self-look-2026-10-01T08-17-52-065Z.png"
+OUT = Path.home() / "dsh-vision-work"
 
 
 def probe_boundary():

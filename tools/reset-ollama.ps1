@@ -8,7 +8,7 @@
 #   reports `local-ollama/*: TIMEOUT` after 60-90 s and calls look "too slow".
 #   On a clean GPU the same model answers a 0.23 MP screenshot in ~5 s.
 #
-# Usage:  pwsh -File C:\Users\28794\ollama-setup\reset-ollama.ps1
+# Usage:  pwsh -File <path>\ollama-setup\reset-ollama.ps1
 param(
   [string]$Model = 'qwen2.5vl:3b',
   [int]$VramFreeTargetMiB = 1000
