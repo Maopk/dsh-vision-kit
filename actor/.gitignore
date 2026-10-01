@@ -1,0 +1,7 @@
+# machine state - never commit
+logs/
+port.txt
+home.txt
+__pycache__/
+*.pyc
+*.png
