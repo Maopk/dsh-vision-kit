@@ -1,0 +1,17 @@
+node_modules/
+*.log
+*.tmp
+*.bak
+*.bak-*
+.DS_Store
+Thumbs.db
+dist/
+out/
+artifacts/
+*.partial
+
+# Never commit screenshots of the local UI: they expose session contents,
+# balances and file paths. Measure locally, publish the numbers instead.
+sample-screenshot.png
+*-annotated.png
+docs/images/

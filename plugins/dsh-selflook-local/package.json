@@ -1,0 +1,17 @@
+{
+  "name": "dsh-selflook-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local bundle: let the DSH web UI render itself to PNG for the agent (self-look).",
+  "main": "./host.js",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web" }
+  }
+}

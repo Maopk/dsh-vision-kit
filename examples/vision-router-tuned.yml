@@ -1,0 +1,50 @@
+# dsh-vision-router config block that made local vision usable on this laptop.
+# Drop this under the `vision-router` entry of <DSH_HOME>/profiles/<profile>/cordis.patch.yml.
+# Only the keys that mattered are shown; DSH merges them over the defaults.
+- id: vision-router
+  name: dsh-vision-router
+  config:
+    progressiveTools: false
+    onboardingSeen: true
+
+    # The structured bootstrap pass forces a large JSON answer *before* the real
+    # question, which doubles the round-trips and blows the per-task deadline on a
+    # laptop GPU. Turn it off unless you specifically want the structured schema.
+    structuredVisionBootstrap: false
+    visionDepth: standard
+    visionDepthMaxCalls: 5
+
+    # A 1707x1019 window is 1.74 MP; the 4 MP default downscaled nothing, so the
+    # local model received full-resolution pixels and prefill dominated the latency.
+    downscaleMaxPixels: 1200000
+
+    # Per single model request. 120000 was too short for a cold qwen2.5vl here.
+    timeoutMs: 300000
+
+    # One vision task (all providers, retries and fallbacks inside it) shares this
+    # wall-clock budget. 180000 is the schema maximum (see settings-number-contract).
+    visionTaskTimeoutMs: 180000
+    ocrTimeoutMs: 60000
+
+    localOllama:
+      enabled: true
+      baseURL: http://127.0.0.1:11434/v1
+      # 3b over 7b: on a clean GPU both answer a 0.23 MP crop in 4-11 s, so the
+      # smaller model wins on VRAM headroom (3.5 GB vs 6.9 GB on an 8.15 GB card).
+      model: qwen2.5vl:3b
+      format: openai
+      maxTokens: 1536
+      reasoningEffort: none
+
+    # Let the router use the desktop capture path, and prefer local: the free cloud
+    # tier answered 429 on effectively every call from this machine.
+    desktopScreenshot: true
+    freeCloudFirst: false
+
+# Debugging note: if every local call ends in TIMEOUT at a suspiciously round
+# number, check the log first —
+#   <DSH_HOME>/logs/vision-router/vision-router.log
+# It prints `effective vision limits taskTimeoutMs=… taskSource=…` per turn, and
+# each provider attempt with its latency. A dead GPU is NOT visible there: look at
+# `ollama ps` / task manager for orphaned llama-server.exe processes holding VRAM
+# (tools/reset-ollama.ps1 clears that state).
