@@ -26,9 +26,15 @@ tools/
   probe_and_ocr.py            step-contrast probe + tesseract crop OCR
   dsh-look-native.ps1         take one screenshot through the plugin RPC
   reset-ollama.ps1            kill orphan llama-server processes holding VRAM, restart one server
+  gui-steps.ps1               plan-driven desktop GUI driver (mouse/keys/clipboard/shot/ZNCC match)
+  contact-send.ps1            one command: search a contact, pick it, verify identity, send, re-check
+  pixel-verdict.py            OCR-free pixel verdicts (composer ink / bubble blue)
+  ocr_boxes.py                tesseract TSV wrapper: crop, upscale, psm, invert, original-coord boxes
+  brightmap.py                ASCII brightness heat-map of a screen region
 docs/
   vision-capability-report.md English report (table, reproduction, pitfalls)
   视觉能力实测报告.md          Chinese report
+  界面自动化日志.md            Chinese work log: widget drag, QQ send, recognition speed-up
   windows-ollama-setup.md     Ollama-on-Windows notes for DSH vision
 examples/vision-router-tuned.yml   the vision-router config block used here
 tests/score-pipeline.ps1      score both zero-model detectors against a ground-truth box
@@ -88,6 +94,26 @@ $shot = Get-Content "$env:USERPROFILE\.dsh-look-last.txt"
 # both zero-model detectors in one go
 pwsh -File tests\score-pipeline.ps1 -Image $shot -Expect 2337,1305,2561,1529
 ```
+
+## GUI automation: driving a real desktop from scripts (2026-10-01)
+
+Not just seeing — acting. `tools/gui-steps.ps1` runs a JSON plan of mouse / keyboard /
+clipboard / screenshot / template-match steps **inside a single pwsh process**, so a whole
+interaction costs one process start instead of one per action.
+
+- **Send a message, measured**: one command does search → pick → verify identity with a
+  header template → send → pixel re-check in **1.89 s / one call**; three independent
+  signals (bubble OCR conf 94.9, a new centred timestamp, composer emptied + bubble-blue
+  pixels at 7.2% of the band).
+- **Two real traps**: the DSH window keeps stealing the foreground (pin the target with
+  `SetWindowPos(HWND_TOPMOST)`, restore afterwards), and QQ sends on **Ctrl+Enter** —
+  a bare Enter only inserts a newline.
+- **Recognition stopped being the bottleneck**: contact-header recognition went from
+  tesseract at 0.7 s per call to in-process **ZNCC template matching at ≈5 ms** (1.000 on
+  the right header, 0.336 when deliberately displaced 400 px, threshold 0.80) — reading only
+  a 175×50 header strip (≈5 ms) instead of the full screen (≈0.25 s).
+
+Process, pitfalls and reproduction commands: [docs/界面自动化日志.md](docs/界面自动化日志.md).
 
 ## Measured results (2026-10-01, 2560×1600 native capture, truth = DOM × dpr 1.5)
 

@@ -15,3 +15,8 @@ artifacts/
 sample-screenshot.png
 *-annotated.png
 docs/images/
+
+# Python / run artefacts from the GUI-automation tools
+__pycache__/
+*.pyc
+*.pyo

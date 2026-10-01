@@ -26,9 +26,15 @@ tools/
   probe_and_ocr.py            单步对比度探针 + tesseract 裁剪 OCR
   dsh-look-native.ps1         通过插件 RPC 直接截一张图，打印路径
   reset-ollama.ps1            清掉占显存的孤儿 llama-server，重启唯一一个 serve
+  gui-steps.ps1               计划驱动的桌面 GUI 引擎（鼠标/键盘/剪贴板/截屏/ZNCC 模板匹配）
+  contact-send.ps1            一条命令：搜索联系人 → 选中 → 模板确认真身 → 发送 → 像素复核
+  pixel-verdict.py            无 OCR 的像素判据（输入框墨迹 / 气泡蓝）
+  ocr_boxes.py                tesseract TSV 包装：裁剪/放大/psm/反相，输出原图坐标
+  brightmap.py                区域亮度 ASCII 热力图，用来找面板与按钮边界
 docs/
   视觉能力实测报告.md          中文：结论表 + 复现命令 + 踩坑
   vision-capability-report.md  英文版
+  界面自动化日志.md            中文：挂件表演 / QQ 代发 / 识别提速（含全部实测数字）
   windows-ollama-setup.md      Windows 上给 DSH 跑视觉模型的注意事项
 examples/vision-router-tuned.yml   vision-router 配置块（含注释）
 tests/score-pipeline.ps1      拿真值框给两条零模型管线打分
@@ -88,6 +94,16 @@ $shot = Get-Content "$env:USERPROFILE\.dsh-look-last.txt"
 # 一条命令跑两条零模型管线
 pwsh -File tests\score-pipeline.ps1 -Image $shot -Expect 2337,1305,2561,1529
 ```
+
+## 界面自动化：脚本驱动真实 GUI（2026-10-01）
+
+不止"看见"，还能**动手**。`tools/gui-steps.ps1` 用一份 JSON 计划驱动鼠标/键盘/剪贴板/截屏/模板匹配，整套交互跑在**一个 pwsh 进程**里：
+
+- **代发消息实测**：一条命令完成"搜索联系人 → 选中 → 用会话头模板确认真身 → 发送 → 像素复核"，**1.89 s / 一次调用**；三条独立证据（气泡 OCR conf 94.9、新增时间分隔线、输入框清空且气泡蓝像素占该带 7.2%）。
+- **两个真坑**：DSH 自己的窗口会不断抢回前台（必须 `SetWindowPos(HWND_TOPMOST)` 钉住目标窗口，收尾还原）；QQ 的发送键是 **Ctrl+Enter**，单回车只换行。
+- **识别不再是瓶颈**：会话头识别从 tesseract 0.7 s/次 换成进程内 **ZNCC 模板匹配 ≈5 ms**（正样本 1.000，故意错位 400 px 只有 0.336，阈值 0.80），并且只抓 175×50 的会话头（≈5 ms）而不是整屏（≈0.25 s）。
+
+完整过程、踩坑与复现命令见 [界面自动化日志](docs/界面自动化日志.md)。
 
 ## 实测结论（2026-10-01，2560×1600 原生截屏，真值 = DOM × dpr 1.5）
 
