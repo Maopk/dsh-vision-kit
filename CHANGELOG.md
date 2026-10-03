@@ -34,6 +34,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `tools/contact-send.ps1`.
 - `actor/tests/bench_fast.py` and `actor/tests/verify_type.py` put this machine's repo path on
   `sys.path`; they now derive `actor/` from `__file__`, so the benches run from any checkout.
+- `actor/tests/bench_fast.py` and `actor/tests/verify_type.py` used to do their work at import
+  time: importing one moved the mouse, clicked and typed into whatever window was focused. The
+  definitions stay at module level and the runs now sit in `main()` behind
+  `if __name__ == '__main__'`; the bodies are unchanged (dedent them back and they diff clean
+  against the previous revision), and `python actor\tests\bench_fast.py` behaves as before.
 
 ### Changed
 
