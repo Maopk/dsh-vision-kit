@@ -31,7 +31,7 @@ from PIL import Image
 
 def to_planes(img: Image.Image, size=None) -> np.ndarray:
     if size is not None:
-        img = img.resize(size, Image.LANCZOS)
+        img = img.resize(size, Image.Resampling.LANCZOS)
     a = np.asarray(img.convert("RGB")).astype(np.float64)
     return a
 
@@ -69,13 +69,13 @@ def match(img: np.ndarray, tpl: np.ndarray, scales, roi=None):
     else:
         search, ox, oy = img, 0, 0
 
-    best = None
+    best: dict | None = None
     th, tw = tpl.shape[:2]
     for s in scales:
         h, w = max(8, int(round(th * s))), max(8, int(round(tw * s)))
         if h >= search.shape[0] or w >= search.shape[1]:
             continue
-        tpl_s = np.asarray(Image.fromarray(tpl.astype(np.uint8)).resize((w, h), Image.LANCZOS)).astype(np.float64)
+        tpl_s = np.asarray(Image.fromarray(tpl.astype(np.uint8)).resize((w, h), Image.Resampling.LANCZOS)).astype(np.float64)
         score = np.zeros((search.shape[0] - h + 1, search.shape[1] - w + 1))
         for c in range(3):
             score += ncc_map(search[:, :, c], tpl_s[:, :, c])

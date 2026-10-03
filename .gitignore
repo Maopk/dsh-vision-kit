@@ -20,3 +20,8 @@ docs/images/
 __pycache__/
 *.pyc
 *.pyo
+
+# Caches the static checks would otherwise drop into the working tree
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

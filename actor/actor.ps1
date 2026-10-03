@@ -53,7 +53,7 @@ $env:TEMP            = Join-Path $actorHome 'tmp'     # keep C: from growing
 $env:TMP             = $env:TEMP
 $env:PIP_CACHE_DIR   = Join-Path $actorHome 'cache\pip'
 $env:ACTOR_PORT      = "$Port"
-try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { Write-Verbose "console encoding left as-is: $($_.Exception.Message)" }
 
 function Get-ActorPython {
   foreach ($c in $pyCandidates) {

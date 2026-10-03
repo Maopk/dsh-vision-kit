@@ -1,0 +1,11 @@
+# Pinned narrow on purpose.  This repo writes "%"-formatting, one-line "if x: y" and
+# bare "except Exception: pass" on purpose, so ruff's default set reports ~160 style
+# hits (UP031 x60, BLE001 x31, RUF046 x18 ...) that would drown the ones that matter.
+# What is enforced is the part that finds bugs: pyflakes (F), the pycodestyle errors
+# (E9, i.e. syntax-level) and bugbear (B).
+line-length = 120
+target-version = "py312"
+exclude = [".git", "out", "artifacts", "node_modules", "__pycache__"]
+
+[lint]
+select = ["E9", "F", "B"]

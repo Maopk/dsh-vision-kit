@@ -1,4 +1,4 @@
-# gui-steps.ps1 — plan-driven desktop GUI driver (mouse / keys / clipboard / screenshot / template match)
+﻿# gui-steps.ps1 — plan-driven desktop GUI driver (mouse / keys / clipboard / screenshot / template match)
 #
 # SUPERSEDED (2026-10-01) by actor/ — the resident PC Actor does the same job from a warm
 # process: UIA structure lookups instead of pixel matching where possible, 40-140 ms per

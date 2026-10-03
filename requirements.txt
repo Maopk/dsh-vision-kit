@@ -1,0 +1,8 @@
+# The two libraries every detector, the actor and the sample generator need: numpy for
+# array work, Pillow for PNG I/O.
+#
+# Pinned, because CI scores the detectors against a synthetic sample and compares the
+# result with a ground-truth box: a silent numpy upgrade must not be able to move that
+# verdict.  Bump these deliberately, with the scored run in the same commit.
+numpy==2.3.5
+pillow==12.3.0

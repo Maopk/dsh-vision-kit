@@ -1,4 +1,4 @@
-# reset-ollama.ps1 — restore a healthy Ollama server on this machine.
+﻿# reset-ollama.ps1 — restore a healthy Ollama server on this machine.
 #
 # Why this exists (root cause found 2026-10-01):
 #   Killing `ollama serve` / `ollama app` does NOT kill their `llama-server.exe`
@@ -53,7 +53,7 @@ for ($i = 0; $i -lt 20; $i++) {
     Write-Host ("      API UP {0}" -f $v)
     $up = $true
     break
-  } catch { }
+  } catch { Write-Verbose "API not up yet: $($_.Exception.Message)" }
 }
 if (-not $up) { Write-Host '      API DID NOT COME UP'; exit 1 }
 

@@ -1,4 +1,4 @@
-import ctypes, sys
+import ctypes
 ctypes.windll.ole32.CoInitializeEx(None, 0x2)
 import comtypes.client
 comtypes.client.GetModule('UIAutomationCore.dll')
@@ -25,6 +25,6 @@ cond = c.CreatePropertyCondition(UIA.UIA_ControlTypePropertyId, 50032)   # Windo
 found = root.FindAll(1, cond)
 print('windows via FindAll:', found.Length)
 for i in range(min(found.Length, 8)):
-    e = found.GetElement(i)
-    r = e.CurrentBoundingRectangle
-    print('   ', repr(e.CurrentName), [r.left, r.top, r.right, r.bottom])
+    el = found.GetElement(i)
+    r = el.CurrentBoundingRectangle
+    print('   ', repr(el.CurrentName), [r.left, r.top, r.right, r.bottom])

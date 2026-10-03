@@ -6,16 +6,16 @@ Proves that skills/demo_calc.py is deterministic: it must reach 56 and 42 no mat
 what the app was showing before, because it raises the window on purpose and clears
 the entry with Esc. Run:  python tests/dirty_calc.py
 """
-import os, re, subprocess, sys, time
+import os, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'skills'))
 from act import send                                            # noqa: E402
-from demo_calc import ensure_standard, read_display, wait_display   # noqa: E402
+from demo_calc import ensure_standard, wait_display             # noqa: E402
 
 try:
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # type: ignore[union-attr]
 except Exception:
     pass
 

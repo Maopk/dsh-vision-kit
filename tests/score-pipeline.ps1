@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Score the two zero-model detectors against a ground-truth box.
 
@@ -46,7 +46,8 @@ if (-not $Python) {
             if (-not $cmd) { continue }
             $exe = $cmd.Source
         }
-        try { & $exe -c 'import numpy, PIL' 2>$null; if ($LASTEXITCODE -eq 0) { $Python = $exe; break } } catch { }
+        try { & $exe -c 'import numpy, PIL' 2>$null; if ($LASTEXITCODE -eq 0) { $Python = $exe; break } }
+        catch { Write-Verbose "not a usable interpreter: $c ($($_.Exception.Message))" }
     }
 }
 if (-not $Python) { throw "No python with numpy + Pillow found. Pass -Python <path>." }

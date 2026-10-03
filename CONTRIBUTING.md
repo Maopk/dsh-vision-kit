@@ -51,6 +51,14 @@ python actor\skills\demo_calc.py      # expect 7*8 -> 56, 12+30 -> 42, PASS
 #    box, then score the detectors against it (-Strict exits 1 when an edge is off)
 python tests\make-synthetic-sample.py out\ci-sample.png
 pwsh -File tests\score-pipeline.ps1 -Image out\ci-sample.png -Expect 80,60,521,381 -Strict
+
+# 5. every offline static check behind one command: parse + ruff + mypy + PSScriptAnalyzer +
+#    node --check. Needs numpy/Pillow and the dev requirements; the analyzer is a PowerShell
+#    module, and the script prints the Install-Module line when it cannot find it.
+pwsh -File tools\ci-static.ps1
+
+# 6. the headless unit tests: pure functions only, no pytest, no screen, no network
+python tests\unit-tests.py            # -v prints every assertion, not just the failures
 ```
 
 A request that comes back as `Expecting property name enclosed in double quotes` means the shell
@@ -63,6 +71,8 @@ whole argument is measured latency.
 
 ## PR checklist
 
+- [ ] `pwsh -File tools\ci-static.ps1` and `python tests\unit-tests.py` both pass (CI runs exactly
+      these two in the `static` and `unit` jobs).
 - [ ] `tests/score-pipeline.ps1` runs and its output is pasted in the PR (CI runs the `-Strict`
       form against `tests/make-synthetic-sample.py`; both should pass locally too).
 - [ ] For `actor/` changes: `python actor\tests\dirty_calc.py` then
@@ -71,3 +81,19 @@ whole argument is measured latency.
       status marker per path — the actor is the current one).
 - [ ] `CHANGELOG.md` has an entry under `## [Unreleased]` or the new version.
 - [ ] No secrets, tokens, machine-specific credentials, or personal paths in the diff.
+
+## Where each script is checked
+
+Four jobs, one per kind of check (`.github/workflows/ci.yml`). A script that is not in the `static`
+or `unit` row is deliberately not judged: it needs this box's screen, its UI Automation or a real
+screenshot, so the `desktop-recorded` job lists it with its reason in the run summary and an
+artifact instead of pretending to test it.
+
+| Script | Job | What runs |
+|---|---|---|
+| `tools/ci-static.ps1` | `static` | all five stages: parse, ruff, mypy, PSScriptAnalyzer, `node --check` |
+| `tests/unit-tests.py` | `unit` | 69 assertions over the pure functions plus the import smoke test |
+| `tests/make-synthetic-sample.py` | `detectors` | draws `out/ci-sample.png` with a known box |
+| `tests/score-pipeline.ps1` | `detectors` | scores that sample: `-Strict -Expect 80,60,521,381` |
+| `tools/{cv_ui_geometry,template_match,pixel-verdict,probe_and_ocr,ocr_boxes,brightmap}.py` | `static` | parsed, linted and type-checked; their real runs need a screenshot, so they are also listed as desktop-only |
+| `actor/actor.py`, `actor/skills/demo_calc.py`, `actor/tests/*.py`, `tools/gui-steps.ps1`, `tools/contact-send.ps1`, `tools/ground_test.py`, `tools/reset-ollama.ps1` | `desktop-recorded` | listed with the reason, never judged |

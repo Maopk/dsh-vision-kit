@@ -1,0 +1,7 @@
+# Static checks (tools/ci-static.ps1).  Pinned to the versions this repo is currently
+# clean under, so a new release cannot turn CI red on its own.
+#
+# PSScriptAnalyzer is a PowerShell module, not a pip package: CI pins it with
+#   Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser
+ruff==0.16.10
+mypy==2.4.0

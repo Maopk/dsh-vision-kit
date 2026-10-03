@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$Text,
     [string]$Contact,                      # omit = use the chat that is already open
     [int]$SearchY = 195,                   # "联系人" row of the search dropdown (physical px)

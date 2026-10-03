@@ -14,15 +14,15 @@ The model sends a *skill*, not a single step; the loop lives in here.
 Protocol: TCP 127.0.0.1:<port>, one JSON request per line, one JSON reply per line.
 Ops: ping shot save find click move drag type key scroll uia wait_for run bench watch log stop
 """
-import argparse, ctypes, json, os, queue, socket, socketserver, sys, threading, time, traceback
+import argparse, ctypes, json, os, queue, socketserver, sys, threading, time, traceback
 from ctypes import wintypes as wt
 
 try:
     import numpy as np
     from numpy.lib.stride_tricks import sliding_window_view
 except Exception:  # pragma: no cover
-    np = None
-    sliding_window_view = None
+    np = None  # type: ignore[assignment]
+    sliding_window_view = None  # type: ignore[assignment]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -741,7 +741,7 @@ def find_color(frame, rgb, tol=40, min_area=80, region=None):
         if row[-1]:
             ends = ends + [row.size]
         cur = []
-        for s, e in zip(starts, ends):
+        for s, e in zip(starts, ends, strict=True):
             idx = len(runs)
             parent[idx] = idx
             for s2, e2, j in prev:              # only the row above can be 4-adjacent
@@ -826,7 +826,7 @@ class Actor:
                         return {'ok': True, 'ms': round(elapsed, 1), 'hit': hits[0]}
                 elif kind in ('uia', 'gone'):
                     UIA, client = uia_client()
-                    els = guarded(lambda: uia_find(client, UIA, cond['selector'], 5), 4.0)
+                    els = guarded(lambda client=client, UIA=UIA: uia_find(client, UIA, cond['selector'], 5), 4.0)
                     if (kind == 'uia' and els) or (kind == 'gone' and not els):
                         return {'ok': True, 'ms': round(elapsed, 1), 'n': len(els)}
             except Exception as e:
@@ -892,7 +892,7 @@ def resolve_target(t, actor):
 
 
 # ------------------------------------------------------------------------ ops
-OPS = {}
+OPS: dict = {}
 
 
 def op(name):
@@ -1223,7 +1223,7 @@ def o_state(req):
     return out
 
 
-_PROBE = {}
+_PROBE: dict = {}
 
 
 def _top_colors(sub, n):

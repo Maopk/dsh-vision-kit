@@ -133,7 +133,7 @@ def fmt(rep, pretty=True):
 
 if __name__ == '__main__':
     try:                                    # element names are Chinese as often as not
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8')   # type: ignore[union-attr]
     except Exception:
         pass
     argv = [a for a in sys.argv[1:] if a != '--json']

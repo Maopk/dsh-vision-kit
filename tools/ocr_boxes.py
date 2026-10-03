@@ -65,12 +65,12 @@ def main() -> int:
     ox = oy = 0
     tmp = None
     if args.crop or args.scale != 1.0 or args.invert or args.contrast:
-        img = Image.open(src)
+        img: Image.Image = Image.open(src)
         if args.crop:
             ox, oy, cw, ch = [int(v) for v in args.crop.split(",")]
             img = img.crop((ox, oy, ox + cw, oy + ch))
         if args.scale != 1.0:
-            img = img.resize((int(img.width * args.scale), int(img.height * args.scale)), Image.LANCZOS)
+            img = img.resize((int(img.width * args.scale), int(img.height * args.scale)), Image.Resampling.LANCZOS)
         if args.contrast or args.invert:
             from PIL import ImageOps
             img = ImageOps.autocontrast(img.convert("RGB"))
@@ -91,7 +91,7 @@ def main() -> int:
         cur["texts"].append(r["text"])
 
     out = []
-    for key, cur in lines.items():
+    for cur in lines.values():
         xs = [w["x"] for w in cur["words"]]; ys = [w["y"] for w in cur["words"]]
         x2 = [w["x"] + w["w"] for w in cur["words"]]; y2 = [w["y"] + w["h"] for w in cur["words"]]
         text = "".join(cur["texts"])

@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from act import send                                            # noqa: E402
 
 try:                                    # keep Chinese element names readable on a GBK console
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')   # type: ignore[union-attr]
 except Exception:
     pass
 

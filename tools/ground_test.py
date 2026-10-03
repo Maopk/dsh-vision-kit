@@ -23,7 +23,6 @@ import sys
 import time
 import urllib.request
 
-import numpy as np
 from PIL import Image
 
 BOX_RE = re.compile(r"\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]")
@@ -34,7 +33,7 @@ def prepare(path: str, max_dim: int):
     w0, h0 = img.size
     scale = min(1.0, max_dim / max(w0, h0))
     if scale < 1.0:
-        img = img.resize((int(round(w0 * scale)), int(round(h0 * scale))), Image.LANCZOS)
+        img = img.resize((int(round(w0 * scale)), int(round(h0 * scale))), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return img.size, base64.b64encode(buf.getvalue()).decode("ascii")

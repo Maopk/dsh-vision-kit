@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # actor/ next door
-sys.stdout.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8')   # type: ignore[union-attr]
 from act import send as _send                                  # noqa: E402
 
 

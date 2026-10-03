@@ -18,6 +18,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   made it useless as a gate. With `-Strict` every expected edge must have a detected border line
   within `-TolerancePx` (default 4 px, the run-length detector reports the inner edge of a stroke)
   and the script exits 1 otherwise.
+- `tools/ci-static.ps1` — every offline static check behind one command: parse each Python file
+  (`ast.parse`, so no `.pyc` lands in the tree), `ruff`, `mypy` **one file at a time** (separate
+  entry scripts all look like `__main__` to mypy when passed together), `PSScriptAnalyzer` for the
+  seven scripts (it checks itself too), `node --check` for the two plugin bundles. Each stage prints
+  its own count and the script exits 1 if any of them failed, so local and CI share one entry point.
+- `tests/unit-tests.py` — 69 assertions over the headless half of the kit: `act.build` / `act.fmt`
+  (the argv → request and reply → text rules), `act.home` / `act.port`, the run-length and
+  morphology helpers, `find_lines` / `find_solid_blobs`, the NCC matcher and `iou`, the
+  `ink` / `blue` counters and `load`'s box slicing, plus an import smoke test for every tool that
+  must stay importable. No pytest dependency: it is a script that prints
+  `N passed / M failed` and exits 1.
+- `ruff.toml`, `mypy.ini`, `PSScriptAnalyzerSettings.psd1`, `requirements.txt` and
+  `requirements-dev.txt`. The linters are pinned narrow on purpose (ruff runs `E9`, `F`, `B`; the
+  analyzer runs Error + Warning), because this repo writes `%`-formatting, one-line `if x: y` and
+  `except Exception: pass` deliberately and the default rule sets answer with ~160 style hits that
+  would bury the real ones. `numpy` and `pillow` are pinned too: a silent numpy upgrade must not be
+  able to move the scored detector run.
+- The workflow grew from one job to four: `static` (the analyzer above), `unit` (the tests above),
+  `detectors` (the scored synthetic sample, unchanged) and `desktop-recorded`, which lists the
+  checks that need this box's screen or its UI Automation — `actor/tests/*.py`,
+  `actor/skills/demo_calc.py`, `tools/gui-steps.ps1`, `tools/contact-send.ps1`, `ground_test.py`,
+  `ocr_boxes.py`, `reset-ollama.ps1` — runs what can run headless, and records the rest in the run
+  summary and an artifact instead of pretending to judge them.
 
 ### Fixed
 
@@ -39,6 +62,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   definitions stay at module level and the runs now sit in `main()` behind
   `if __name__ == '__main__'`; the bodies are unchanged (dedent them back and they diff clean
   against the previous revision), and `python actor\tests\bench_fast.py` behaves as before.
+- Findings from the three new linters, all of them small and none of them behavioural: an unused
+  `socket` import in `actor/actor.py`, `zip(starts, ends, strict=True)` where both arrays come from
+  one `np.where` and so cannot differ in length, two lambdas in the `probe` path that now bind
+  `client` / `UIA` as defaults (a late rebind can no longer leak into a timed-out call), the unused
+  `numpy` import in `tools/ground_test.py`, the unused loop variable in `tools/ocr_boxes.py`, and
+  the three empty `catch { }` blocks (`actor/actor.ps1`, `tests/score-pipeline.ps1`,
+  `tools/reset-ollama.ps1`), which now say in `Write-Verbose` what they swallowed.
+- `sys.stdout.reconfigure(...)` carries `# type: ignore[union-attr]` at its five call sites:
+  typeshed types `sys.stdout` as `TextIO`, which has no `reconfigure`, so mypy is right and the
+  code is right — the comment records why instead of silencing a whole file.
+- The remaining mypy findings, all of them type-level and none behavioural: `Image.LANCZOS` became
+  `Image.Resampling.LANCZOS` in `tools/template_match.py`, `tools/ground_test.py` and
+  `tools/ocr_boxes.py` (the old alias still resolves at runtime, but Pillow's own annotations do not
+  declare it), that script's crop/scale variable is annotated `Image.Image` because it starts as an
+  `ImageFile` and every later step returns an `Image`, and the two numpy fallbacks in
+  `actor/actor.py` carry `# type: ignore[assignment]` — a failed import assigns `None` to a name
+  mypy has already typed as a module.
+- Six non-ASCII PowerShell scripts (`tests/score-pipeline.ps1`, `tools/contact-send.ps1`,
+  `tools/dsh-look-native.ps1`, `tools/gui-steps.ps1`, `tools/reset-ollama.ps1` and the new
+  `tools/ci-static.ps1`) now start with a UTF-8 BOM. `PSScriptAnalyzer` asks for it and
+  `actor/actor.ps1` already had one, so this is the repo's existing convention, not a new rule.
 
 ### Changed
 

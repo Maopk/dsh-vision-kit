@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Take a native screenshot through the dsh-selflook-local plugin and print the PNG path.
 
