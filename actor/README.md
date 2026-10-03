@@ -19,8 +19,8 @@
 ## 文件：代码在仓库里，状态在 HOME 里
 
 这层目录**只有代码**；所有会变的东西（python 依赖、日志、抓帧、port.txt、临时文件、pip 缓存）都在 **HOME**，
-HOME 是本机路径、默认在仓库外、不进 git（本机：`D:\DSH\dsh-actor`，记录在同目录的 `home.txt`，可用
-`-HomePath` 或环境变量 `ACTOR_HOME` 改）。
+HOME 是本机路径、默认在仓库外、不进 git（这台机器上是 `D:\DSH\dsh-actor`，**只是例子**：实际位置记在同目录的
+`home.txt`，`-Where` 会打印，可用 `-HomePath` 或环境变量 `ACTOR_HOME` 改）。
 
 ```
 actor/                     ← 代码（可提交、可搬走）
@@ -35,7 +35,7 @@ actor/                     ← 代码（可提交、可搬走）
   tests/verify_type.py 证明批量输入照样落字：150、500 字符 + 像素 diff + ASCII 墨迹图
   .gitignore          把 home.txt / 日志 / png 挡在 git 外
 
-D:\DSH\dsh-actor\          ← HOME（机器本地，不提交）
+D:\DSH\dsh-actor\          ← HOME（机器本地，不提交；`-Where` 打印实际路径，这里只是这台机器的例子）
   pylibs\             pip 装到这里的依赖（comtypes）
   logs\               actor.log + stdout/stderr
   port.txt            守护进程端口
@@ -55,7 +55,8 @@ python actor\skills\demo_calc.py
 ```
 
 客户端在守护进程没起来时会**自动拉起**它（并带上 HOME 与 `HOME\pylibs`），所以技能脚本可以直接跑。
-解释器用 DSH 自带的 python（3.12 + numpy），`pip install --target` 装依赖，**不往 C 盘写任何东西**。
+解释器按 `-Python` / `%ACTOR_PY%` → DSH 自带的 python（3.12 + numpy）→ PATH 上的 `python` / `py` 依次找，
+`pip install --target` 装依赖，**不往 C 盘写任何东西**。
 
 ## 协议（一行 JSON 进，一行 JSON 出）
 
@@ -160,7 +161,7 @@ python actor\skills\demo_calc.py
 ## 与 dsh-vision-kit 的关系
 
 `actor/` 是「手和眼睛的常驻回路」；`dsh-vision-kit` 里的抓帧/OCR/CV 工具是它的视觉资产来源。
-两者共用同一个自带 python（`dsh-runtimes`），`comtypes` 装在 HOME 的 `pylibs`（本机 `D:\DSH\dsh-actor\pylibs`）。
+两者共用同一个解释器（默认取 DSH 自带的 python，见上），`comtypes` 装在 HOME 的 `pylibs`（例如 `D:\DSH\dsh-actor\pylibs`）。
 
 ## 为什么状态不放在仓库目录
 

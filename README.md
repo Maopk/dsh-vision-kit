@@ -33,19 +33,21 @@ blobs and a vectorised ZNCC pyramid) for canvases and self-drawn UI that UIA can
 
 | Step | Old way (one tool round trip each) | Actor |
 |---|---|---|
-| List top-level windows (name/class/hwnd/rect) | 2–4 s | **41 ms** |
+| List top-level windows (name/class/hwnd/rect) | 2–4 s | **48 ms** |
 | Find a control by name / automation id | 1–3 s | **59 ms** (36 buttons in one call) |
-| Click (with human-like easing) | 1–2 s | **~120 ms** |
+| Click (no human-like easing by default) | 1–2 s | **33–46 ms** (the old easing path: 120 ms) |
 | Type text / press Enter | 2–4 s / 1–2 s | **50 ms / 54 ms** |
-| Full-screen colour blobs | 1.1 s | **110 ms** |
-| Full-screen 60×60 template match | 573 ms | **91 ms** |
+| Full-screen colour blobs | 1.1 s | **102 ms** |
+| Full-screen 60×60 template match | 573 ms | **83 ms** |
 | Protocol round trip / client start-up | — | **12 ms / 107 ms** |
-| Whole skill: launch Calculator → `7*8` → read 56 → `12+30` → click "=" → read 42 | minutes, dozens of calls | **0.62 s** (warm) / **1.4 s** (cold UWP launch), **zero pixel reads** |
+| Whole skill: launch Calculator → `7*8` → read 56 → `12+30` → click "=" → read 42 | minutes, dozens of calls | **0.62–0.72 s** (warm) / **1.4 s** (cold UWP launch), **zero pixel reads** |
 
-Details, the op table, the state layout (`D:\DSH\dsh-actor`) and seven hard-won pitfalls
+Details, the op table, the state layout and nine hard-won pitfalls
 (`TreeScope_Descendants = 4`, single-STA COM ownership with per-call timeouts, UWP launch
 via `shell:appsFolder`, `SendInput` only reaches the focused window → raise + pin first,
-poll the structure channel instead of sleeping): [actor/README.md](actor/README.md).
+poll the structure channel instead of sleeping — the full list is in `actor/README.md`):
+[actor/README.md](actor/README.md). The HOME that holds state is machine-local: `-Where` prints
+it, `-HomePath` / `ACTOR_HOME` move it, and nothing generated lands in the repo.
 
 ## Generation 1: seeing the screen
 

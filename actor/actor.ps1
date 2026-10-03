@@ -10,22 +10,31 @@
     .\actor.ps1 -Tail             tail the actor log
     .\actor.ps1 -Stop             stop the daemon
     .\actor.ps1 -Where            print the resolved home (state dir)  [not -Home: $HOME is read-only in PS]
+    .\actor.ps1 -Python <exe>     pick the interpreter (default chain: -Python / %ACTOR_PY% ->
+                                  DSH's bundled runtime -> python on PATH -> py)
 
   Layout: this directory holds CODE only.  Every mutable thing - python deps
   (pylibs), logs, port.txt, tmp, pip cache - lives in the HOME, which is machine
-  local and typically outside the repo (this box: D:\DSH\dsh-actor, recorded in
-  home.txt next to this script).  Nothing generated ever lands in git, and no
-  download or temp file is written to C:.
+  local and typically outside the repo (whatever this box uses is recorded in
+  home.txt next to this script, and -Where prints it).  Nothing generated ever
+  lands in git, and no download or temp file is written to C:.
 #>
 param(
   [switch]$Setup, [switch]$Start, [switch]$Stop, [switch]$Status, [switch]$Bench,
   [switch]$Tail, [switch]$Where, [string]$Send, [string]$File, [int]$Port = 8731,
-  [string]$HomePath
+  [string]$HomePath, [string]$Python
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-# DSH's bundled runtime (python 3.12 + numpy 2.3.5); it is the interpreter the actor is tested on.
-$py = 'C:\Users\28794\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe'
+# Interpreter, best first: -Python / %ACTOR_PY%, DSH's bundled runtime (python 3.12 + numpy 2.3.5 -
+# the one the actor is tested on), whatever "python" resolves to, then the py launcher.  No absolute
+# path is committed here (CONTRIBUTING, ground rule 2); the bundled runtime is a candidate, not a
+# requirement, so a checkout on another box still starts.
+$pyCandidates = @()
+if ($Python) { $pyCandidates += $Python }
+if ($env:ACTOR_PY) { $pyCandidates += $env:ACTOR_PY }
+$pyCandidates += (Join-Path $env:USERPROFILE '.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe')
+$pyCandidates += 'python', 'py'
 
 function Resolve-Home {
   if ($HomePath) { return $HomePath }
@@ -46,7 +55,14 @@ $env:PIP_CACHE_DIR   = Join-Path $actorHome 'cache\pip'
 $env:ACTOR_PORT      = "$Port"
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
-function Get-ActorPython { if (Test-Path $py) { return $py } return (Get-Command python).Source }
+function Get-ActorPython {
+  foreach ($c in $pyCandidates) {
+    if (-not $c) { continue }
+    if ($c -match '[\\/]') { if (Test-Path $c) { return $c } }
+    else { $cmd = Get-Command $c -ErrorAction SilentlyContinue; if ($cmd) { return $cmd.Source } }
+  }
+  throw "No python found. Put python on PATH, or pass -Python <path to python.exe>."
+}
 
 function Test-Actor {
   try { $c = New-Object System.Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $Port); $c.Close(); return $true }

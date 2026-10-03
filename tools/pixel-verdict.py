@@ -1,4 +1,4 @@
-"""Verdict for qq-send.ps1 — no OCR, pure pixels.
+"""Verdict for contact-send.ps1 — no OCR, pure pixels.
 
 dry  : the draft must be visible in the input strip.
 send : the input strip must change (draft gone) AND new QQ-blue bubble pixels

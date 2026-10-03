@@ -3,10 +3,11 @@ and proves each one with a pixel diff + an ASCII ink map (no PNG round trip).
 
     python verify_type.py          # Notepad must already be open
 """
+import os
 import sys
 import time
 
-sys.path.insert(0, r'D:\DSH\dsh-vision-kit\actor')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # actor/ next door
 sys.stdout.reconfigure(encoding='utf-8')
 from act import send                                          # noqa: E402
 

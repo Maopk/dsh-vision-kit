@@ -46,6 +46,11 @@ pwsh -File tests/score-pipeline.ps1 -Image .\shot.png -Expect <x1,y1,x2,y2>
 # 3. the actor's own end-to-end test: dirty state in, two clean runs out
 python actor\tests\dirty_calc.py
 python actor\skills\demo_calc.py      # expect 7*8 -> 56, 12+30 -> 42, PASS
+
+# 4. the same thing CI runs, with no screen involved: draw a synthetic screenshot with a known
+#    box, then score the detectors against it (-Strict exits 1 when an edge is off)
+python tests\make-synthetic-sample.py out\ci-sample.png
+pwsh -File tests\score-pipeline.ps1 -Image out\ci-sample.png -Expect 80,60,521,381 -Strict
 ```
 
 If you change anything under `actor/`, also paste the per-step timings from
@@ -54,7 +59,8 @@ whole argument is measured latency.
 
 ## PR checklist
 
-- [ ] `tests/score-pipeline.ps1` runs and its output is pasted in the PR.
+- [ ] `tests/score-pipeline.ps1` runs and its output is pasted in the PR (CI runs the `-Strict`
+      form against `tests/make-synthetic-sample.py`; both should pass locally too).
 - [ ] For `actor/` changes: `python actor\tests\dirty_calc.py` then
       `python actor\skills\demo_calc.py` both PASS, and the timings are in the PR.
 - [ ] Docs updated when behaviour or measured numbers change (the READMEs carry a

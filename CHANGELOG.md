@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `.github/workflows/ci.yml` — the repo can now check itself on a clean Windows runner:
+  `py_compile` over every Python file, then `tests/score-pipeline.ps1` against a synthetic
+  screenshot whose expected box is known, so the scoring pipeline runs end to end without this
+  box's screen, its sample screenshot or its interpreter path.
+- `tests/make-synthetic-sample.py` — draws that screenshot (frame + block at known coordinates),
+  so the pipeline can be re-scored anywhere. CI is not special: the same two commands are in
+  CONTRIBUTING's checks.
+- `tests/score-pipeline.ps1 -Strict` — the script used to print numbers and always exit 0, which
+  made it useless as a gate. With `-Strict` every expected edge must have a detected border line
+  within `-TolerancePx` (default 4 px, the run-length detector reports the inner edge of a stroke)
+  and the script exits 1 otherwise.
+
+### Fixed
+
+- `actor/act.cmd` and `actor/actor.ps1` no longer hard-code one machine's interpreter path
+  (CONTRIBUTING, ground rule 2: no absolute paths in committed scripts). Both now try
+  `-Python` / `%ACTOR_PY%` → DSH's bundled runtime → `python` on PATH → the `py` launcher, and
+  say what to set when none of them works. `tests/score-pipeline.ps1` got the same candidates.
+- The top-level README's latency table now carries the numbers measured in `actor/README.md`
+  (windows 48 ms, colour blobs 102 ms, template match 83 ms, click 33–46 ms) instead of the older
+  41 / 110 / 91 / ~120 ms, and says nine hard-won pitfalls, not seven.
+- `actor/README.md` no longer presents this machine's HOME (`D:\DSH\dsh-actor`) as part of the
+  layout — it is one example, and `-Where` prints the real one.
+- `tools/pixel-verdict.py` pointed at `qq-send.ps1`, which does not exist; the script it verifies is
+  `tools/contact-send.ps1`.
+- `actor/tests/bench_fast.py` and `actor/tests/verify_type.py` put this machine's repo path on
+  `sys.path`; they now derive `actor/` from `__file__`, so the benches run from any checkout.
+
 ## [1.3.0] — 2026-10-01
 
 The **fast loop**: the daemon stops handing back PNGs and tree dumps, and every input op can raise

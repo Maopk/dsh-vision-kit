@@ -3,10 +3,11 @@
 Run with the bundled interpreter (PIL/numpy), against the resident actor:
     python bench_fast.py
 """
+import os
 import sys
 import time
 
-sys.path.insert(0, r'D:\DSH\dsh-vision-kit\actor')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # actor/ next door
 sys.stdout.reconfigure(encoding='utf-8')
 from act import send as _send                                  # noqa: E402
 
