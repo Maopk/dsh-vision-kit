@@ -53,6 +53,10 @@ python tests\make-synthetic-sample.py out\ci-sample.png
 pwsh -File tests\score-pipeline.ps1 -Image out\ci-sample.png -Expect 80,60,521,381 -Strict
 ```
 
+A request that comes back as `Expecting property name enclosed in double quotes` means the shell
+ate the inner quotes before `act.py` saw them: call `actor\act.py` with the interpreter directly
+(`PYTHONPATH=%ACTOR_HOME%\pylibs`), or write the request to a file and pass its path.
+
 If you change anything under `actor/`, also paste the per-step timings from
 `act.cmd '{"op":"run",...}'` (or `actor.ps1 -Bench`) in the PR — this repo's
 whole argument is measured latency.

@@ -35,6 +35,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `actor/tests/bench_fast.py` and `actor/tests/verify_type.py` put this machine's repo path on
   `sys.path`; they now derive `actor/` from `__file__`, so the benches run from any checkout.
 
+### Changed
+
+- `actor/README.md` gained two pitfalls from an end-to-end screen-driving session: JSON handed to
+  `act.cmd` from PowerShell arrives without its inner quotes (call `act.py` instead, or pass a
+  request file), and a web editor already has focus when it loads — pasting, clicking the editor
+  and pasting again doubles the file. CONTRIBUTING's checks carry the same shell caveat, plus the
+  `?filename=<path>` URL form GitHub actually needs for a new file.
+
 ## [1.3.0] — 2026-10-01
 
 The **fast loop**: the daemon stops handing back PNGs and tree dumps, and every input op can raise

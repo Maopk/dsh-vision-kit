@@ -157,6 +157,16 @@ python actor\skills\demo_calc.py
    `ListItem`，名字是「标准 计算器」「绘图 计算器」这种带后缀的串，**必须按子串匹配**，精确匹配找不到。
 9. **`type` 快不等于 app 收得下**：一次性 SendInput 批次在记事本、计算器上都稳（150 字 72 ms、500 字 332 ms），
    但遇到丢字的 app 要退到 `chunk:40` 分批 —— 快路径必须是「可退化的」，不是「二选一」。
+10. **别从 PowerShell 把 JSON 递给 `act.cmd`**：`act.cmd '{"op":"uia","what":"windows"}'` 里的内层双引号
+    会在 shell 那一层被吃掉，`act.py` 收到 `{op:uia,...}`，报
+    `Expecting property name enclosed in double quotes: line 1 column 2` —— 看起来像 actor 挂了，
+    其实请求根本没成型。要么直接调 `act.py`（`PYTHONPATH=<HOME>\pylibs`，解释器用 `-Python` 那套候选），
+    要么把请求写进文件再传路径。
+11. **网页/表单自动化：别粘两次，也别信路径**：Web 编辑器加载完通常**自带焦点**（GitHub 新建文件页就是），
+    一次 `ctrl+v` 已经进去了，再「点一下编辑器再粘」就是两份 —— 实测粘成 80 行，还把 `jobs:` 和它的
+    下一行粘在了一起。粘完先看编辑器右下角的行数。另外 GitHub 新建文件的地址要用
+    `new/<branch>?filename=<完整路径>`，写成 `new/<branch>/<路径>` 会把路径当成目录，最后落在
+    `.github/workflows/ci.yml/ci.yml`；提交后拿 API 核对 blob sha，才算真凭据。
 
 ## 与 dsh-vision-kit 的关系
 

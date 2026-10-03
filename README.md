@@ -42,10 +42,11 @@ blobs and a vectorised ZNCC pyramid) for canvases and self-drawn UI that UIA can
 | Protocol round trip / client start-up | — | **12 ms / 107 ms** |
 | Whole skill: launch Calculator → `7*8` → read 56 → `12+30` → click "=" → read 42 | minutes, dozens of calls | **0.62–0.72 s** (warm) / **1.4 s** (cold UWP launch), **zero pixel reads** |
 
-Details, the op table, the state layout and nine hard-won pitfalls
+Details, the op table, the state layout and eleven hard-won pitfalls
 (`TreeScope_Descendants = 4`, single-STA COM ownership with per-call timeouts, UWP launch
 via `shell:appsFolder`, `SendInput` only reaches the focused window → raise + pin first,
-poll the structure channel instead of sleeping — the full list is in `actor/README.md`):
+poll the structure channel instead of sleeping, don't hand JSON to `act.cmd` from PowerShell
+— the full list is in `actor/README.md`):
 [actor/README.md](actor/README.md). The HOME that holds state is machine-local: `-Where` prints
 it, `-HomePath` / `ACTOR_HOME` move it, and nothing generated lands in the repo.
 
