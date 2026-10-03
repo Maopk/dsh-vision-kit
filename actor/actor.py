@@ -12,10 +12,11 @@ One long-lived process owns:
 The model sends a *skill*, not a single step; the loop lives in here.
 
 Protocol: TCP 127.0.0.1:<port>, one JSON request per line, one JSON reply per line.
-Ops: ping shot save find click move drag type key scroll uia window wait_for watch state probe log bench run macro stop
+Ops: ping shot save find click move drag type key scroll uia window launch wait_for watch state probe log bench run macro stop
 (kept in step with the @op(...) decorators by tools/check-skill-ops.py, which runs in CI)
 """
 import argparse, collections, ctypes, json, os, queue, re, socketserver, sys, threading, time, traceback
+import shlex, subprocess
 from ctypes import wintypes as wt
 
 try:
@@ -1204,6 +1205,119 @@ def o_window(req):
     return {'ok': True, 'mode': 'front', **info()}
 
 
+# ------------------------------------------------------------------------ launch
+def _pid_windows(pid):
+    """Visible titled top-level windows of one process: [(hwnd, title), ...]."""
+    u = ctypes.windll.user32
+    out = []
+
+    def cb(hwnd, _lparam):
+        h = wt.HWND(hwnd)
+        p = ctypes.c_ulong()
+        u.GetWindowThreadProcessId(h, ctypes.byref(p))
+        if p.value == int(pid) and u.IsWindowVisible(h):
+            buf = ctypes.create_unicode_buffer(512)
+            u.GetWindowTextW(h, buf, 512)
+            if buf.value:
+                out.append((int(hwnd or 0), buf.value))
+        return True
+
+    u.EnumWindows(ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)(cb), 0)
+    return out
+
+
+def launch_app(spec):
+    """Start a program and, if asked, block until its window exists.
+
+    Shared by the `launch` op and by `macro run`, so a recorded skill can bring up the app
+    it needs instead of requiring you to open it first.  "The app did not show up" is a
+    normal reply (ok:false, with the pid), not an exception, so a run can trace it.
+    """
+    path = str(spec.get('path') or spec.get('exe') or '').strip()
+    if not path:
+        raise ValueError('launch: pass path= (an .exe, a .lnk/.bat, or shell:appsFolder\\<AUMID>)')
+    tail = spec.get('args')
+    if isinstance(tail, (list, tuple)):
+        argv = [path] + [str(x) for x in tail]
+    elif isinstance(tail, str) and tail.strip():
+        argv = [path] + shlex.split(tail)
+    else:
+        argv = [path]
+    timeout = float(spec.get('timeout_ms', 20000))
+    wait = str(spec.get('wait') or spec.get('title_contains') or '')
+    by_pid = bool(spec.get('wait_pid'))
+    if wait and not spec.get('force'):      # idempotent by default: a replay that runs twice
+        open_now = resolve_hwnd(title_contains=wait, limit=80, timeout=2.0)   # must not start
+        if open_now:                                                          # two instances
+            out = {'ok': True, 'path': path, 'how': 'already running', 'pid': 0, 'hwnd': open_now,
+                   'title': (_win_info(open_now) or {}).get('title', ''), 'waited_ms': 0.0,
+                   'skipped': 'a window matching %r is already open (force: true starts another)'
+                              % wait}
+            if spec.get('front', True):
+                out['front'] = _front(open_now)
+            return out
+    t0 = time.perf_counter()
+    pid, hwnd = 0, 0
+    if path.lower().startswith('shell:'):
+        subprocess.Popen(['explorer.exe', path], close_fds=True)   # only explorer starts a UWP app
+        how = 'explorer.exe ' + path
+    elif path.lower().endswith('.exe'):
+        proc = subprocess.Popen(argv, cwd=spec.get('cwd') or None, close_fds=True)
+        pid, how = proc.pid, ' '.join(argv)
+    else:                                                          # .lnk / .bat / document
+        os.startfile(path)
+        how = 'startfile ' + path
+    if wait:
+        deadline = t0 + timeout / 1000.0
+        while time.perf_counter() < deadline:
+            hwnd = resolve_hwnd(title_contains=wait, limit=80, timeout=2.0)
+            if hwnd:
+                break
+            time.sleep(0.15)
+    elif by_pid and pid:
+        deadline = t0 + timeout / 1000.0
+        while time.perf_counter() < deadline:
+            got = _pid_windows(pid)
+            if got:
+                hwnd = got[0][0]
+                break
+            time.sleep(0.15)
+    out = {'ok': True, 'path': path, 'how': how, 'pid': pid, 'hwnd': hwnd, 'title': '',
+           'waited_ms': round((time.perf_counter() - t0) * 1000, 1)}
+    if hwnd:
+        info = _win_info(hwnd) or {}
+        out['title'] = info.get('title', '')
+        out['rect'] = info.get('rect')
+        if spec.get('front', True):
+            out['front'] = _front(hwnd)
+    elif wait or (by_pid and pid):
+        out['ok'] = False
+        out['error'] = 'launch: %s did not open a window within %d ms' % (
+            ('no window titled %r' % wait) if wait else ('pid %d' % pid), int(timeout))
+    return out
+
+
+@op('launch')
+def o_launch(req):
+    """Start a program and wait for its window - the missing first step of a recorded skill.
+
+      {"op":"launch","path":"C:\\\\Program Files\\\\App\\\\app.exe","args":["-x"],"wait":"App"}
+      {"op":"launch","path":"shell:appsFolder\\\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+       "wait":"计算器"}
+      {"op":"launch","path":"C:\\\\Apps\\\\app.lnk"}          .lnk / .bat / 文档走 shell 打开
+
+    `wait` is a substring of the window name (UIA): the call blocks until that window
+    exists, so the step after it can click straight into it.  `wait_pid: true` waits for
+    any window of the started process instead.  With neither, it returns as soon as the
+    process exists - that is the right call for a launcher that opens its own window.
+
+    Idempotent: if a window matching `wait` is already open, that window is reused and
+    nothing new is started (`force: true` starts another instance anyway).  A recording
+    that begins with `launch` therefore replays correctly whether or not the app is open.
+    """
+    return launch_app(req)
+
+
 @op('wait_for')
 def o_wait(req):
     return A.wait_for(req.get('cond', {}), req.get('timeout_ms', 5000), req.get('poll_ms', 60))
@@ -1496,6 +1610,7 @@ def macro_index():
                     'args': sorted(_dict(doc.get('args')).keys()),
                     'created': doc.get('created'), 'updated': doc.get('updated'),
                     'note': (doc.get('note') or '')[:60], 'replays': st.get('replays', 0),
+                    'launch': bool(doc.get('launch')),
                     'last_ms': st.get('last_ms'), 'last_ok': st.get('last_ok'),
                     'last_at': st.get('last_at')})
     return out
@@ -1577,7 +1692,8 @@ def exec_steps(steps, req, ctx=None):
     top_front = req.get('front') is not None or req.get('front_title') is not None
     # The front window is also the best search scope for every UIA selector in this run:
     # resolved once here (then cached), so each step searches ONE window (~95 ms) instead
-    # of the whole desktop (~1.5 s). A step that brings its own scope/hwnd keeps it.
+    # of the whole desktop (~1.5 s). A step that brings its own scope/hwnd keeps it, and a
+    # `launch` step that has to start the app hands its new window over to the steps below.
     t_scope = time.perf_counter()
     scope_hwnd = resolve_hwnd(req.get('front'), req.get('front_title')) if top_front else 0
     scope_ms = round((time.perf_counter() - t_scope) * 1000, 1)
@@ -1599,6 +1715,8 @@ def exec_steps(steps, req, ctx=None):
         except Exception as e:
             res = {'ok': False, 'error': '%s: %s' % (type(e).__name__, e)}
             log('step.fail', i=i, op=name, err=str(e))
+        if name == 'launch' and not scope_hwnd and res.get('hwnd'):
+            scope_hwnd = int(res['hwnd'])           # what we just started is the best scope
         entry = {'i': i, 'op': name, 'ms': round((time.perf_counter() - t1) * 1000, 1), 'ok': res.get('ok', True)}
         for k in ('n', 'at', 'how', 'hit', 'hits', 'ratio', 'path', 'did', 'value', 'element', 'windows', 'ms'):
             if k in res and k != 'ms':
@@ -1648,6 +1766,14 @@ def o_run(req):
     return out
 
 
+def _launch_from_steps(steps):
+    """The launch step of a recorded run, if it has one - so a replay can start its app."""
+    for s in steps:
+        if isinstance(s, dict) and s.get('op') == 'launch':
+            return {k: v for k, v in s.items() if k not in ('op', 'as', 'literal')}
+    return None
+
+
 def _record(name, req, steps, ms=0, run_id=None, overwrite=False, failed_at=None):
     """Freeze a run's steps as a named macro; never clobbers one without overwrite."""
     p = macro_path(name)
@@ -1665,6 +1791,7 @@ def _record(name, req, steps, ms=0, run_id=None, overwrite=False, failed_at=None
     doc = {'schema': MACRO_SCHEMA, 'name': name, 'created': created, 'updated': now,
            'steps': steps, 'args': {k: v for k, v in _dict(req.get('args')).items() if k not in captured},
            'front': req.get('macro_front') or None, 'note': req.get('note') or '',
+           'launch': _dict(req.get('macro_launch')) or _launch_from_steps(steps),
            'from_run': {'id': run_id, 'ms': ms, 'front': _front_now()},
            'stats': {'replays': 0}}
     return {'saved': True, 'name': name, 'steps': len(steps), 'path': macro_write(doc),
@@ -1704,6 +1831,22 @@ def _run_macro(req):
         return {'ok': True, 'macro': doc['name'], 'dry': True, 'args': args,
                 'steps': [interp(s, ctx, 'step %d' % i) for i, s in enumerate(steps)]}
     front = _dict(req.get('front')) or _dict(doc.get('front')) or None
+    started = None
+    spec = _dict(req.get('launch')) or _dict(doc.get('launch'))
+    if spec:                                    # a macro that knows how to start its own app
+        spec = dict(interp(spec, dict(args), 'launch'))
+        already = resolve_hwnd(front.get('hwnd'), front.get('title_contains')) if front else 0
+        if already and not spec.get('force'):
+            started = {'ok': True, 'skipped': 'the window was already open', 'hwnd': already}
+        else:
+            if front and not spec.get('wait') and not spec.get('title_contains') \
+                    and front.get('title_contains'):
+                spec['wait'] = front['title_contains']
+            started = launch_app(spec)
+    if started is not None and started.get('ok') is False:
+        return {'ok': False, 'macro': doc['name'], 'steps': 0, 'total_ms': 0, 'trace': [],
+                'launch': started, 'error': started.get('error'),
+                'hint': 'the macro could not start its app - check launch.path / launch.wait'}
     eff = dict(req)
     fronted = None
     front_ms = 0.0
@@ -1728,7 +1871,7 @@ def _run_macro(req):
     out = {'ok': ok, 'macro': doc['name'], 'steps': len(trace), 'total_ms': ms, 'trace': trace,
            'front_resolve_ms': round(front_ms + scope_ms, 1),
            'args': args, 'replays': st['replays'], 'front': fronted,
-           'recorded_ms': (doc.get('from_run') or {}).get('ms')}
+           'launch': started, 'recorded_ms': (doc.get('from_run') or {}).get('ms')}
     failed = next((t['i'] for t in trace if not t['ok']), None)
     if failed is not None:
         out['failed_step'] = failed

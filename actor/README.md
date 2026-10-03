@@ -71,6 +71,7 @@ python actor\skills\demo_calc.py
 | `type` `key` `scroll` | 文本、键名（enter/esc/tab/ctrl+z…）、滚轮 |
 | `uia` | `windows` / `find` / `tree` / `point` / `invoke` / `focus` / `setvalue` |
 | `window` | 窗口管理：`front`（抢前台并激活）、`top`/`untop`（置顶钉住，做动作期间不让别的程序抢走焦点）、`info`、`max`/`min`/`restore`/`move`/`close`；`hwnd=` 或 `title_contains=` |
+| `launch` | **启动程序并等它的窗口**：`path`（`.exe` / `.lnk` / `.bat` / `shell:appsFolder\<AUMID>`）、`args`、`cwd`、`wait`（窗口名片段，阻塞到窗口出现）、`wait_pid`、`timeout_ms`（默认 20 s）。`wait` 命中的窗口已经开着就**复用、不重复启动**（`force: true` 才另起一个实例）；宏自带 `launch` 时，回放会先把应用拉起来 |
 | `wait_for` | 轮询条件（元素出现、颜色出现、模板出现），带超时 |
 | `watch` | 后台按 fps 抓帧做差分（等画面变化，不用轮询） |
 | `run` | **一次调用跑完一整段技能**：`{"op":"run","steps":[{...},{...}]}`，逐步返回 `ms/ok`；加 `"results": true` 则每步自己那份返回也塞进该步的 `data`（长文本截断、长列表保留 6 项 + `…(N more items)`，`frame`/`png` 不带） |
@@ -161,7 +162,14 @@ python actor\skills\demo_calc.py
 用 `scope_hwnd` 发给每一步，`click`/`move`/`drag` 的 target 与 `uia`/`find` 都认这个字段。
 所以录进宏的选择器**不带 hwnd 也能跨重启**，同时保持快。
 
-宏不会自己启动程序：回放前目标窗口要在（`launch` 还没做）。
+宏可以自己启动程序：把 `{"op":"launch","path":"…","wait":"窗口名片段"}` 写成第一步，它会随宏一起存下来
+（宏文件里多一个 `launch` 字段），回放时窗口不在就**先启动再跑**。`wait` 命中的窗口已经开着时**不重复启动**
+（`force: true` 才另起实例），所以同一条宏在「应用开着」和「应用没开」两种情况下都能原样回放。
+
+实测（上面那 8 步 = 7 步前面加一个冷启动 `launch`，Calculator）：应用已关时回放 wall 5.3 s =
+**等窗口 2.6 s** + 回放 **0.22 s**，读回「显示为 42」；应用已开时那一步 0.2 ms、`start=reused`。
+等窗口的时间标在客户端表头 `start=`，和 `front=` 一样**不在 `total_ms` 里**。`launch` 拉起来的窗口
+还会成为后续步骤的 UIA 搜索范围：`click` 520 → 58 ms，读回显 1342 → 19 ms。
 
 ## 写一个技能
 

@@ -339,6 +339,39 @@ ok('a macro name cannot climb out of the macros dir', _escape)
 actor_srv.HOME = _home_was
 
 
+# ── launch: the macro that starts its own app ────────────────────────────────────────
+
+group('actor - launch steps and self-starting macros')
+_home_was = actor_srv.HOME
+actor_srv.HOME = tempfile.mkdtemp(prefix='dsh-vision-launch-')
+
+eq('a launch step is lifted out of a recorded run',
+   actor_srv._launch_from_steps([{'op': 'window', 'mode': 'front'},
+                                 {'op': 'launch', 'path': 'C:\\App\\a.exe', 'wait': 'App',
+                                  'as': 'started'}]),
+   {'path': 'C:\\App\\a.exe', 'wait': 'App'})
+eq('a run without a launch step carries none', actor_srv._launch_from_steps([{'op': 'sleep'}]), None)
+_nopath = False
+try:
+    actor_srv.launch_app({})
+except ValueError:
+    _nopath = True
+ok('launch refuses to guess what to start', _nopath)
+
+_sv = actor_srv.o_macro({'what': 'save', 'name': 'unit-launch', 'overwrite': True,
+                         'args': {'app': 'Notepad'},
+                         'steps': [{'op': 'launch', 'path': 'C:\\App\\a.exe', 'wait': '{{app}}'},
+                                   {'op': 'sleep', 'ms': 1}]})
+eq('a recorded macro keeps the launch that starts it', _sv['saved'], True)
+eq('  and the macro file carries it',
+   actor_srv.macro_read('unit-launch')['launch'], {'path': 'C:\\App\\a.exe', 'wait': '{{app}}'})
+eq('  and the index can say so', actor_srv.macro_index()[0]['launch'], True)
+_dry = actor_srv.o_macro({'what': 'run', 'name': 'unit-launch', 'args': {'app': 'Calc'}, 'dry': True})
+eq('a dry run expands the launch variables without starting anything',
+   _dry['steps'][0]['wait'], 'Calc')
+actor_srv.HOME = _home_was
+
+
 # ── import smoke ────────────────────────────────────────────────────────────────────
 
 group('import smoke - the headless modules still load')

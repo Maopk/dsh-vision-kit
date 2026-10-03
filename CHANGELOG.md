@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `actor.py` op `launch` — start a program and, if asked, block until its window exists
+  (`wait: "<substring>"` for a window name, `wait_pid: true` for any window of the process).
+  `.exe` goes through `subprocess`, `shell:appsFolder\<AUMID>` (UWP) through `explorer.exe`,
+  anything else (`.lnk`, `.bat`, document) through `os.startfile`. It is **idempotent**: a
+  window matching `wait` that is already open is reused, so replaying a skill never starts a
+  second instance (`force: true` does). A `run` whose steps contain a `launch` records that
+  spec into the macro, and `macro run` starts the app itself when the window is missing — a
+  recorded skill is now one call away from a cold desktop. The window a `launch` step brings
+  up also becomes the UIA search scope for the steps below it (full-desktop scan 1500 ms →
+  20 ms, click 520 ms → 58 ms). Measured: Calculator started cold (2.6 s waiting for the
+  window, reported as `start=` and not counted in `total_ms`) + the 8 steps in 218 ms, read
+  back 「显示为 42」; with the app already open the launch is skipped (`start=reused`).
 - `.github/workflows/ci.yml` — the repo can now check itself on a clean Windows runner:
   `py_compile` over every Python file, then `tests/score-pipeline.ps1` against a synthetic
   screenshot whose expected box is known, so the scoring pipeline runs end to end without this

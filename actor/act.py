@@ -127,8 +127,9 @@ def fmt(rep, pretty=True):
         for m in rep['macros']:
             last = 'never' if m.get('last_ms') is None else '%sms %s' % (
                 m['last_ms'], 'ok' if m.get('last_ok') else 'FAILED')
-            out.append('  %-24s %2s steps  replays=%-3s %-14s %s' % (
-                m.get('name'), m.get('steps'), m.get('replays'), last, m.get('note') or ''))
+            out.append('  %-24s %2s steps  %-10s replays=%-3s %-14s %s' % (
+                m.get('name'), m.get('steps'), 'can-start' if m.get('launch') else 'hand-start',
+                m.get('replays'), last, m.get('note') or ''))
         return '\n'.join(out)
     if not isinstance(rep.get('trace'), list):
         return json.dumps(rep, ensure_ascii=False)
@@ -137,6 +138,9 @@ def fmt(rep, pretty=True):
         head = 'macro=%s replay#%s %s' % (rep['macro'], rep.get('replays'), head)
     if rep.get('front_resolve_ms'):                  # the window lookup that runs before step 0
         head += ' front=%sms' % rep['front_resolve_ms']
+    if isinstance(rep.get('launch'), dict):          # a replay may have had to start the app
+        lz = rep['launch']
+        head += ' start=%s' % ('reused' if lz.get('skipped') else '%sms' % lz.get('waited_ms'))
     out = [head]
     for t in rep['trace']:
         extra = ''
