@@ -1,4 +1,4 @@
-<#
+﻿<#
   DSH PC Actor - Windows side helper.
 
     .\actor.ps1 -Setup            provision: create the home, install python deps there (idempotent)

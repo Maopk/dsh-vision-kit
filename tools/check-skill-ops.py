@@ -85,7 +85,7 @@ def main(argv: "list | None" = None) -> int:
                 where = hits[op][0]
                 print("      %-12s %s:%d" % (op, rel, where[1]))
         for op in unknown:
-            for where, lineno in hits[op]:
+            for _where, lineno in hits[op]:
                 problems.append("%s:%d names op %r, which actor/actor.py does not register"
                                 % (rel, lineno, op))
 

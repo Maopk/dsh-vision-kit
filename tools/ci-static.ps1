@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Every offline static check for this repo, in one command.
 

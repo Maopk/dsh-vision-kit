@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Mirror this repo's skills/ into the DSH skills home, and report drift with -Check.
 
