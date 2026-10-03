@@ -372,6 +372,104 @@ eq('a dry run expands the launch variables without starting anything',
 actor_srv.HOME = _home_was
 
 
+# ── capture: a demonstration by hand becomes macro steps ─────────────────────────────
+
+group('actor - capture compiles a demonstration into steps')
+_home_was = actor_srv.HOME
+actor_srv.HOME = tempfile.mkdtemp(prefix='dsh-vision-capture-')
+_t = 100.0
+
+_steps, _warn = actor_srv.compile_events([
+    {'kind': 'click', 'x': 10, 'y': 20, 't': _t, 'button': 'left', 'target': {'uia': {'aid': 'Seven'}}},
+    {'kind': 'click', 'x': 11, 'y': 20, 't': _t + 0.2, 'button': 'left', 'target': {'uia': {'aid': 'Seven'}}},
+    {'kind': 'type', 'text': '12', 't': _t + 1.0, 'ime': 0},
+    {'kind': 'key', 'keys': ['enter'], 't': _t + 1.2},
+])
+eq('two clicks a fifth of a second apart become one double click', _steps[0]['n'], 2)
+eq('  and it keeps the selector that was resolved for it', _steps[0]['target'], {'uia': {'aid': 'Seven'}})
+eq('  a run of typing becomes one type step', _steps[1], {'op': 'type', 'text': '12'})
+eq('  a single key becomes key=', _steps[2], {'op': 'key', 'key': 'enter'})
+eq('  and nothing else is invented', len(_steps), 3)
+eq('  with nothing to warn about', _warn, [])
+
+_steps, _warn = actor_srv.compile_events([
+    {'kind': 'click', 'x': 5, 'y': 6, 't': _t, 'button': 'right'},
+    {'kind': 'drag', 'from': [1, 2], 'to': [30, 40], 't': _t, 'button': 'left',
+     'from_target': {'xy': [1, 2]}, 'to_target': {'uia': {'name': 'Trash'}}},
+    {'kind': 'scroll', 'x': 7, 'y': 8, 'dy': -240, 'dx': 0, 't': _t, 'target': {'xy': [7, 8]}},
+    {'kind': 'key', 'keys': ['ctrl', 'c'], 't': _t},
+    {'kind': 'type', 'text': '', 't': _t},
+])
+eq('a right click keeps its button', _steps[0]['button'], 'right')
+eq('  and falls back to the point it happened at', _steps[0]['target'], {'xy': [5, 6]})
+eq('a drag keeps both ends', (_steps[1]['from'], _steps[1]['to']), ({'xy': [1, 2]}, {'uia': {'name': 'Trash'}}))
+eq('the wheel moves the cursor there first', _steps[2]['op'], 'move')
+eq('  then scrolls by the recorded delta', _steps[3], {'op': 'scroll', 'dy': -240})
+eq('a chord keeps its modifiers', _steps[4], {'op': 'key', 'keys': ['ctrl', 'c']})
+eq('an empty text run is not a step', len(_steps), 5)
+
+_warn = actor_srv.compile_events([{'kind': 'type', 'text': 'nihao', 't': _t, 'ime': 0x0804}])[1]
+contains('typing under an IME is flagged, not silently trusted', _warn[0], '0x0804')
+eq('a uia target is called uia', actor_srv.capture_how({'op': 'click', 'target': {'uia': {'aid': 'x'}}}), 'uia')
+eq('a picture target is called anchor',
+   actor_srv.capture_how({'op': 'click', 'target': {'image': 'C:\\a\\b.png'}}), 'anchor')
+eq('a point target is called xy', actor_srv.capture_how({'op': 'click', 'target': {'xy': [1, 2]}}), 'xy')
+eq('  and a step aiming at nothing says so', actor_srv.capture_how({'op': 'sleep'}), 'other')
+
+_tr = actor_srv.capture_trace(_steps)
+eq('the trace has one line per step', len(_tr), len(_steps))
+eq('  and says what a step will aim at', _tr[0]['how'], 'xy [5, 6]')
+eq('  and what a keystroke or a text run will do', (actor_srv.capture_trace([
+    {'op': 'type', 'text': 'hello'}, {'op': 'key', 'keys': ['ctrl', 'c']}])[0]['did'],
+    actor_srv.capture_trace([{'op': 'key', 'keys': ['ctrl', 'c']}])[0]['did']), ('hello', 'ctrl+c'))
+
+eq('capture without a verb says which verbs it takes', actor_srv.o_capture({})['ok'], False)
+contains('  and names start', actor_srv.o_capture({'what': 'nonsense'})['error'], 'start')
+eq('status is honest while nothing is being recorded', actor_srv.o_capture({'what': 'status'})['active'], False)
+eq('a bare word works where what= does', actor_srv.o_capture({'args': ['status']})['active'], False)
+eq('stopping a capture that never started is refused', actor_srv.o_capture({'what': 'stop'})['ok'], False)
+eq('a capture name cannot climb out of the macros dir',
+   actor_srv.o_capture({'what': 'start', 'name': '../escape', 'front_title': 'x'})['ok'], False)
+contains('watching nothing is refused',
+         actor_srv.o_capture({'what': 'start', 'name': 'unit-demo'})['error'], 'front_title')
+
+_sv = actor_srv.o_macro({'what': 'save', 'name': 'unit-demo', 'overwrite': True,
+                         'steps': actor_srv.compile_events([
+                             {'kind': 'click', 'x': 3, 'y': 4, 't': _t, 'button': 'left',
+                              'target': {'uia': {'aid': 'Seven'}}},
+                             {'kind': 'type', 'text': '7', 't': _t}])[0]})
+eq('a capture start reads as a line, not as json',
+   act.fmt({'ok': True, 'capture': 'demo', 'scope': {'title': '计算器'}, 'anchors': 'C:\\a\\_anchors\\demo',
+            'next': 'demo it now, then: act.cmd capture stop'}).splitlines()[0],
+   'capture=demo scope=计算器')
+contains('a capture stop says where it saved',
+         act.fmt({'ok': True, 'capture': 'demo', 'steps': 2, 'events': 2, 'dropped': 0, 'injected': 0,
+                  'saved': 'C:\\m\\demo.json', 'how': {'uia': 2}, 'trace': [], 'notes': ['n'],
+                  'next': 'act.cmd macro run name=demo'}),
+         'saved=C:\\m\\demo.json')
+eq('an idle capture status says so, in words', act.fmt({'ok': True, 'active': False, 'capture': ''}), 'not recording')
+
+_cap = actor_srv.Capture()
+_cap.scope_pid = -12345                      # no process has this pid, so nothing can match the scope
+eq('anything happening outside the watched window is dropped, not recorded', _cap._fg_ok(), False)
+eq('  and the drop is counted', _cap.dropped, 1)
+
+# the pid check alone is not enough: a click can miss a window that moved and hit what is behind it
+_cap.scope_rect = [100, 100, 200, 200]       # scope_hwnd is 0, so this rect is used as-is
+_cap.dropped = 0
+eq('a click inside the watched window counts', _cap._inside(150, 150), True)
+eq('a click that lands outside it is dropped', _cap._inside(50, 150), False)
+eq('  and it joins the same dropped count', _cap.dropped, 1)
+eq('  and stopping an empty capture refuses to write a macro',
+   actor_srv.o_capture({'what': 'stop'})['ok'], False)
+
+eq('recorded steps save through the normal macro path', _sv['saved'], True)
+eq('  and they are just steps',
+   [s['op'] for s in actor_srv.o_macro({'what': 'run', 'name': 'unit-demo', 'dry': True})['steps']],
+   ['click', 'type'])
+actor_srv.HOME = _home_was
+
+
 # ── import smoke ────────────────────────────────────────────────────────────────────
 
 group('import smoke - the headless modules still load')

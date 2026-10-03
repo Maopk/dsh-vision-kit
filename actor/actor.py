@@ -12,7 +12,7 @@ One long-lived process owns:
 The model sends a *skill*, not a single step; the loop lives in here.
 
 Protocol: TCP 127.0.0.1:<port>, one JSON request per line, one JSON reply per line.
-Ops: ping shot save find click move drag type key scroll uia window launch wait_for watch state probe log bench run macro stop
+Ops: ping shot save find click move drag type key scroll uia window launch wait_for watch state probe log bench run macro capture stop
 (kept in step with the @op(...) decorators by tools/check-skill-ops.py, which runs in CI)
 """
 import argparse, collections, ctypes, json, os, queue, re, socketserver, sys, threading, time, traceback
@@ -1908,6 +1908,638 @@ def o_macro(req):
     if what == 'run':
         return _run_macro(req)
     raise ValueError('macro needs what=list|get|run|save|del, got %r' % (what,))
+
+
+# ------------------------------------------------------------------- capture
+# A human demonstration recorded into macro steps. Both low-level hooks
+# (WH_MOUSE_LL / WH_KEYBOARD_LL) live in ONE pump thread and their procs only
+# timestamp and append, so a 150 ms UIA lookup can never stall your input; a worker
+# thread then resolves what was under each click - UIA selector first, image anchor
+# second, plain coordinates last. Scope: events count only while the foreground window
+# belongs to the same PROCESS as the window you named, so the rest of your desktop
+# cannot leak into the recording (modal dialogs of the same app stay in scope).
+
+MOUSE_LL, KEYBOARD_LL = 14, 13
+WM_LDOWN, WM_LUP, WM_RDOWN, WM_RUP, WM_MDOWN, WM_MUP = 0x0201, 0x0202, 0x0204, 0x0205, 0x0207, 0x0208
+WM_WHEEL, WM_HWHEEL, WM_QUIT = 0x020A, 0x020E, 0x0012
+WM_KEYDOWN, WM_SYSKEYDOWN = 0x0100, 0x0104
+LL_MOUSE_INJECTED, LL_KEY_INJECTED = 0x01, 0x10
+MOD_VKS = {0x10: 'shift', 0x11: 'ctrl', 0x12: 'alt', 0x5B: 'win', 0x5C: 'win'}
+VK_NAME: dict = {}
+for _name, _code in VK.items():
+    VK_NAME.setdefault(_code, _name)      # 'return'/'escape'/'del'/'lwin' lose to the first spelling
+CJK_LAYOUTS = (0x0804, 0x0404, 0x0C04, 0x1004, 0x0411, 0x0412)      # zh-CN/TW/HK/SG, ja, ko
+ANCHOR_PX, ANCHOR_MIN_STD, MAX_SEL_AREA, CAPTURE_LATE_S = 68, 7.0, 400000, 2.0
+
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
+u32 = ctypes.windll.user32
+k32 = ctypes.windll.kernel32
+k32.GlobalLock.restype = ctypes.c_void_p
+k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+u32.GetClipboardData.restype = ctypes.c_void_p
+u32.SetWindowsHookExW.restype = ctypes.c_void_p
+u32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, ctypes.c_void_p, wt.DWORD]
+u32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+u32.CallNextHookEx.restype = ctypes.c_ssize_t
+u32.PostThreadMessageW.argtypes = [wt.DWORD, wt.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [('pt', wt.POINT), ('mouseData', wt.DWORD), ('flags', wt.DWORD),
+                ('time', wt.DWORD), ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong))]
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [('vkCode', wt.DWORD), ('scanCode', wt.DWORD), ('flags', wt.DWORD),
+                ('time', wt.DWORD), ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong))]
+
+
+def clipboard_text():
+    """CF_UNICODETEXT, or '' - it turns a demonstrated Ctrl+V into a `type` step, which
+    is also the only way to record CJK typed through an IME."""
+    if not u32.OpenClipboard(None):
+        return ''
+    try:
+        if not u32.IsClipboardFormatAvailable(13):
+            return ''
+        h = u32.GetClipboardData(13)
+        if not h:
+            return ''
+        p = k32.GlobalLock(h)
+        if not p:
+            return ''
+        try:
+            return ctypes.c_wchar_p(p).value or ''
+        finally:
+            k32.GlobalUnlock(h)
+    finally:
+        u32.CloseClipboard()
+
+
+def window_pid(hwnd):
+    pid = wt.DWORD()
+    u32.GetWindowThreadProcessId(wt.HWND(int(hwnd)), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def capture_how(step):
+    """uia / anchor / xy - what a recorded step will aim at when it replays."""
+    for key in ('target', 'from'):
+        t = step.get(key)
+        if isinstance(t, dict):
+            if 'uia' in t:
+                return 'uia'
+            if 'image' in t:
+                return 'anchor'
+            if 'xy' in t:
+                return 'xy'
+    return 'other'
+
+
+def _target_text(t):
+    """A recorded target as one printable word."""
+    if not isinstance(t, dict):
+        return '?'
+    if 'uia' in t:
+        sel = _dict(t['uia']).get('selector') or t['uia']
+        return 'uia ' + ' '.join('%s=%s' % (k, v) for k, v in _dict(sel).items())
+    if 'image' in t:
+        return 'anchor ' + os.path.basename(str(t['image']))
+    if 'xy' in t:
+        return 'xy %s' % (t['xy'],)
+    return '?'
+
+
+def compile_events(events):
+    """Recorded events -> (macro steps, warnings). Pure: no UIA, no screen, no clock.
+
+    A demonstration is turned into the same step format a `run` records, so a macro
+    made this way replays through exactly the same engine.
+    """
+    steps = []
+    warnings = []
+    i = 0
+    while i < len(events):
+        ev = events[i]
+        kind = ev.get('kind')
+        if kind == 'click':
+            nxt = events[i + 1] if i + 1 < len(events) else {}
+            dbl = (ev.get('button') == 'left' and nxt.get('kind') == 'click' and nxt.get('button') == 'left'
+                   and abs(nxt.get('t', 0) - ev.get('t', 0)) <= 0.5
+                   and abs(nxt.get('x', 0) - ev.get('x', 0)) <= 6 and abs(nxt.get('y', 0) - ev.get('y', 0)) <= 6)
+            step = {'op': 'click', 'target': ev.get('target') or {'xy': [ev.get('x'), ev.get('y')]}}
+            if ev.get('button') != 'left':
+                step['button'] = ev.get('button')
+            if dbl:
+                step['n'] = 2
+                i += 1
+            steps.append(step)
+        elif kind == 'drag':
+            step = {'op': 'drag', 'from': ev.get('from_target') or {'xy': ev.get('from')},
+                    'to': ev.get('to_target') or {'xy': ev.get('to')}}
+            if ev.get('button') != 'left':
+                step['button'] = ev.get('button')
+            steps.append(step)
+        elif kind == 'scroll':
+            tgt = ev.get('target') or {'xy': [ev.get('x'), ev.get('y')]}
+            steps.append({'op': 'move', 'target': tgt, 'dur_ms': 1})     # the wheel goes to the cursor
+            step = {'op': 'scroll'}
+            if ev.get('dy'):
+                step['dy'] = int(ev['dy'])
+            if ev.get('dx'):
+                step['dx'] = int(ev['dx'])
+            steps.append(step)
+        elif kind == 'type':
+            text = ev.get('text') or ''
+            if text:
+                if ev.get('ime'):
+                    warnings.append('the IME layout 0x%04x was active while you typed %r - a hook sees the keys, '
+                                    'not the composed characters' % (int(ev['ime']), text[:12]))
+                steps.append({'op': 'type', 'text': text})
+        elif kind == 'key':
+            keys = [k for k in (ev.get('keys') or []) if k]
+            if keys:
+                steps.append({'op': 'key', 'keys': keys} if len(keys) > 1 else {'op': 'key', 'key': keys[0]})
+        i += 1
+    return steps, warnings
+
+
+def capture_trace(steps):
+    """One printable line per recorded step - act.cmd prints them like a run trace."""
+    out = []
+    for i, s in enumerate(steps):
+        t = {'i': i, 'op': s.get('op'), 'ok': True, 'ms': 0}
+        if s.get('n'):
+            t['n'] = s['n']
+        if s.get('key'):
+            t['did'] = s['key']
+        elif s.get('keys'):
+            t['did'] = '+'.join(s['keys'])
+        elif s.get('text') is not None:
+            t['did'] = (s['text'][:24] + '...') if len(s['text']) > 27 else s['text']
+        if s.get('target'):
+            t['how'] = _target_text(s['target'])
+        elif s.get('from'):
+            t['how'] = _target_text(s.get('from'))
+            t['element'] = 'to ' + _target_text(s.get('to'))
+        out.append(t)
+    return out
+
+
+class Capture(object):
+    """A demonstration in, macro steps out (see the `capture` op)."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self._reset()
+
+    def _reset(self):
+        self.active = False
+        self.name = ''
+        self.front_title = ''
+        self.scope_hwnd = 0
+        self.scope_pid = 0
+        self.scope_rect: list = []
+        self.rect_at = 0.0
+        self.t0 = 0.0
+        self.seq = 0
+        self.dropped = 0
+        self.injected = 0
+        self.pump_tid = 0
+        self.events: list = []
+        self.errors: list = []
+        self.warnings: list = []
+        self.mods: list = []
+        self.hooks: list = []
+        self.threads: dict = {}
+        self.procs: dict = {}
+        self.foreign: dict = {}
+        self.drag: dict = {}
+        self.text: dict = {}
+        self.scroll: dict = {}
+        self.down_keys: set = set()
+        self.queue = queue.Queue()
+        self.ready = threading.Event()
+
+    # ---- the hook procs: timestamp and append only (no UIA, no PIL, no disk, no sleep)
+    def _hook_fail(self, err):
+        if len(self.errors) < 6:
+            self.errors.append(str(err))
+
+    def _mouse_proc(self, n_code, w_param, l_param):
+        if n_code >= 0 and self.active:
+            try:
+                info = ctypes.cast(l_param, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                self.on_mouse(int(w_param), info)
+            except Exception as e:
+                self._hook_fail('mouse: %s' % e)
+        return u32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    def _key_proc(self, n_code, w_param, l_param):
+        if n_code >= 0 and self.active:
+            try:
+                info = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                self.on_key(int(w_param), info)
+            except Exception as e:
+                self._hook_fail('key: %s' % e)
+        return u32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    def _fg_ok(self):
+        """True while the foreground window belongs to the app being demonstrated."""
+        hwnd = int(u32.GetForegroundWindow())
+        pid = window_pid(hwnd)
+        if self.scope_pid and pid != self.scope_pid:
+            if pid not in self.foreign:
+                self.foreign[pid] = (_win_info(hwnd) or {}).get('title') or ('pid %d' % pid)
+            self.dropped += 1
+            self.drag = {}
+            return False
+        return True
+
+    def _inside(self, x, y):
+        """A click only counts when it lands inside the window being watched: the pid check
+        alone accepts a click that misses a moved window and hits whatever is behind it.
+        The rect is re-read (cheaply, no UIA) so moving the window mid-demo is still fine."""
+        now = time.perf_counter()
+        if self.scope_hwnd and (not self.scope_rect or now - self.rect_at > 0.5):
+            self.scope_rect = list((_win_info(self.scope_hwnd) or {}).get('rect') or [])
+            self.rect_at = now
+        r = self.scope_rect
+        if not r:
+            return True
+        if r[0] <= x <= r[2] and r[1] <= y <= r[3]:
+            return True
+        self.dropped += 1
+        return False
+
+    def on_mouse(self, wparam, info):
+        t = time.perf_counter()
+        x, y = int(info.pt.x), int(info.pt.y)
+        if info.flags & LL_MOUSE_INJECTED:
+            self.injected += 1
+        if wparam == 0x0200:                                    # WM_MOUSEMOVE: only a drag path
+            d = self.drag
+            if not d or t - d['last'] < 0.03:
+                return
+            d['last'] = t
+            d['path'].append([x, y])
+            return
+        if wparam in (WM_WHEEL, WM_HWHEEL):
+            if self.drag or not self._fg_ok() or not self._inside(x, y):
+                return
+            sc = self.scroll
+            if sc and abs(sc['x'] - x) + abs(sc['y'] - y) > 48:
+                self.scroll = sc = {}
+            delta = ctypes.c_short((int(info.mouseData) >> 16) & 0xFFFF).value
+            if not sc:
+                sc = {'kind': 'scroll', 'dx': 0, 'dy': 0, 'x': x, 'y': y, 't': t, 'target': None}
+                self.scroll = sc
+                self.events.append(sc)
+                self.queue.put(sc)
+            sc['x'], sc['y'] = x, y
+            if wparam == WM_WHEEL:
+                sc['dy'] += int(delta)
+            else:
+                sc['dx'] += int(delta)
+            return
+        if wparam in (WM_LDOWN, WM_RDOWN, WM_MDOWN):
+            self.scroll = {}
+            self.drag = {}
+            if not self._fg_ok() or not self._inside(x, y):
+                return
+            self.drag = {'x': x, 'y': y, 't': t, 'last': t, 'path': [],
+                         'button': {WM_LDOWN: 'left', WM_RDOWN: 'right', WM_MDOWN: 'middle'}[wparam]}
+            return
+        if wparam in (WM_LUP, WM_RUP, WM_MUP):
+            d = self.drag
+            self.drag = {}
+            if not d:
+                return
+            self._close_text()
+            far = max((abs(p[0] - d['x']) + abs(p[1] - d['y']) for p in d['path']), default=0)
+            if far >= 14:
+                ev = {'kind': 'drag', 'from': [d['x'], d['y']], 'to': [x, y], 't': d['t'],
+                      'button': d['button'], 'from_target': None, 'to_target': None}
+            else:
+                ev = {'kind': 'click', 'x': d['x'], 'y': d['y'], 't': d['t'], 'button': d['button'],
+                      'n': 1, 'target': None}
+            self.events.append(ev)
+            self.queue.put(ev)
+
+    def _ime(self):
+        try:
+            lang = int(u32.GetKeyboardLayout(0)) & 0xFFFF
+        except Exception:
+            return 0
+        return lang if lang in CJK_LAYOUTS else 0
+
+    def _to_text(self, vk, scan):
+        state = (ctypes.c_ubyte * 256)()
+        for m in self.mods:
+            if m in VK:
+                state[VK[m]] = 0x80
+        buf = ctypes.create_unicode_buffer(8)
+        try:
+            n = u32.ToUnicodeEx(vk, scan, state, buf, 8, 0, u32.GetKeyboardLayout(0))
+        except Exception:
+            return ''
+        return buf[:n] if n and n > 0 else ''
+
+    def _text_ev(self):
+        if not self.text:
+            self.text = {'kind': 'type', 'text': '', 't': time.perf_counter(), 'ime': self._ime()}
+            self.events.append(self.text)
+        return self.text
+
+    def _close_text(self):
+        if self.text and not self.text.get('text'):
+            for i in range(len(self.events) - 1, -1, -1):       # an empty run is not a step
+                if self.events[i] is self.text:
+                    del self.events[i]
+                    break
+        self.text = {}
+
+    def on_key(self, wparam, info):
+        vk = int(info.vkCode)
+        down = wparam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+        if info.flags & LL_KEY_INJECTED:
+            self.injected += 1
+        if vk in MOD_VKS:
+            mod = MOD_VKS[vk]
+            if down:
+                if mod not in self.mods:
+                    self.mods.append(mod)
+            elif mod in self.mods:
+                self.mods.remove(mod)
+            return
+        if not down:
+            self.down_keys.discard(vk)
+            return
+        if vk in self.down_keys:                                # auto-repeat
+            return
+        self.down_keys.add(vk)
+        if not self._fg_ok():
+            return
+        name = VK_NAME.get(vk) or ''
+        ctrl, alt = 'ctrl' in self.mods, 'alt' in self.mods
+        if ctrl or alt:
+            key = name or (chr(vk).lower() if 0x30 <= vk <= 0x5A else '')
+            if not key:
+                return
+            self._close_text()
+            self.scroll = {}
+            if key == 'v' and ctrl and 'alt' not in self.mods and 'shift' not in self.mods:
+                clip = clipboard_text()
+                if clip:                                        # CJK pasted in: record the text itself
+                    self._text_ev()['text'] += clip
+                    self.warnings.append('Ctrl+V became a type step (%d chars from the clipboard)' % len(clip))
+                    return
+            self.events.append({'kind': 'key', 'keys': self.mods + [key], 't': time.perf_counter()})
+            return
+        txt = self._to_text(vk, int(info.scanCode))
+        if txt:
+            self._text_ev()['text'] += txt
+            return
+        if name:
+            self._close_text()
+            self.scroll = {}
+            self.events.append({'kind': 'key', 'keys': self.mods + [name], 't': time.perf_counter()})
+
+    # ---- lifecycle
+    def start(self, req):
+        if self.active:
+            return {'ok': False, 'error': 'a capture is already running (%r) - act.cmd capture stop first' % self.name}
+        name = str(req.get('name') or req.get('macro') or time.strftime('demo-%m%d-%H%M%S'))
+        if not MACRO_NAME_RE.match(name):
+            return {'ok': False, 'error': 'capture: bad macro name %r (letters, digits, . _ -)' % name}
+        if os.path.exists(macro_path(name)) and not req.get('overwrite'):
+            return {'ok': False, 'error': 'macro %r already exists - add overwrite: true' % name}
+        front = req.get('front_title') or req.get('title_contains') or _dict(req.get('front')).get('title_contains')
+        hwnd = int(req.get('hwnd') or 0)
+        if not hwnd:
+            if not front:
+                return {'ok': False, 'error': 'capture start needs front_title=<part of the window title> (or hwnd=)'}
+            hwnd = int(resolve_hwnd(title_contains=front, timeout=2.0))
+            if not hwnd:
+                return {'ok': False, 'error': 'capture: no window matches %r' % front}
+        self._reset()
+        self.name = name
+        self.front_title = front or (_win_info(hwnd) or {}).get('title') or ''
+        self.scope_hwnd, self.scope_pid = hwnd, window_pid(hwnd)
+        self.t0 = time.perf_counter()
+        self.procs = {'mouse': HOOKPROC(self._mouse_proc), 'key': HOOKPROC(self._key_proc)}
+        self.active = True
+        self.threads['worker'] = threading.Thread(target=self._work, name='capture-worker', daemon=True)
+        self.threads['worker'].start()
+        self.threads['pump'] = threading.Thread(target=self._pump, name='capture-pump', daemon=True)
+        self.threads['pump'].start()
+        self.ready.wait(3.0)
+        if len(self.hooks) < 2:
+            self.active = False
+            self._stop_hooks()
+            return {'ok': False, 'error': 'capture: could not install the input hooks', 'errors': self.errors[:3]}
+        if req.get('front', True):
+            _front(hwnd)
+        log('capture.start', name=name, hwnd=hwnd, pid=self.scope_pid, title=self.front_title)
+        return {'ok': True, 'capture': name, 'scope': {'hwnd': hwnd, 'pid': self.scope_pid, 'title': self.front_title},
+                'anchors': os.path.join(macros_dir(), '_anchors', name),
+                'next': 'demo it now, then: act.cmd capture stop'}
+
+    def stop(self, req=None):
+        req = _dict(req)
+        if not self.active:
+            return {'ok': False, 'error': 'no capture is running'}
+        self.active = False
+        self._stop_hooks()
+        with self.lock:
+            self._close_text()
+            self.scroll = {}
+        self.queue.put(None)
+        w = self.threads.get('worker')
+        if w:
+            w.join(timeout=10.0)
+        events = list(self.events)
+        ms = round((time.perf_counter() - self.t0) * 1000, 1)
+        base = {'capture': self.name, 'events': len(events), 'dropped': self.dropped, 'injected': self.injected,
+                'total_ms': ms, 'notes': self.warnings, 'foreign': sorted(set(self.foreign.values()))[:5]}
+        if self.errors:
+            base['errors'] = self.errors[:3]
+        if req.get('discard'):
+            return dict(base, ok=True, discarded=True)
+        steps, notes = compile_events(events)
+        if not steps:
+            return dict(base, ok=False, steps=0, notes=notes,
+                        error='nothing was recorded - only clicks, keys and text that arrive while the app you '
+                              'named is in front become steps')
+        counts = collections.Counter(capture_how(s) for s in steps)
+        now = time.strftime('%Y-%m-%dT%H:%M:%S')
+        doc = {'schema': MACRO_SCHEMA, 'name': self.name, 'created': now, 'updated': now, 'steps': steps,
+               'args': {}, 'front': {'title_contains': self.front_title} if self.front_title else None,
+               'note': 'recorded from a demonstration (%d events, %d steps)' % (len(events), len(steps)),
+               'source': 'capture', 'launch': None,
+               'from_demo': {'events': len(events), 'dropped': self.dropped, 'injected': self.injected, 'ms': ms},
+               'stats': {'replays': 0}}
+        path = macro_write(doc)
+        log('capture.stop', name=self.name, steps=len(steps), dropped=self.dropped)
+        return dict(base, ok=True, steps=len(steps), saved=path, how=dict(counts),
+                    notes=notes + self.warnings, trace=capture_trace(steps),
+                    next='act.cmd macro run name=%s' % self.name)
+
+    def status(self):
+        return {'ok': True, 'active': bool(self.active), 'capture': self.name,
+                'scope': {'hwnd': self.scope_hwnd, 'pid': self.scope_pid, 'title': self.front_title},
+                'events': len(self.events), 'dropped': self.dropped, 'injected': self.injected,
+                'pending': self.queue.qsize(),
+                'ms': round((time.perf_counter() - self.t0) * 1000, 1) if self.active else 0,
+                'foreign': sorted(set(self.foreign.values()))[:5],
+                'next': 'demo it now, then: act.cmd capture stop' if self.active else 'nothing is being recorded'}
+
+    def cancel(self):
+        if not self.active:
+            return {'ok': False, 'error': 'no capture is running'}
+        return self.stop({'discard': True})
+
+    # ---- threads
+    def _pump(self):
+        """Both hooks are installed HERE: a low-level hook is delivered to the thread that
+        installed it, and that thread must pump messages for the procs to ever run."""
+        self.pump_tid = int(k32.GetCurrentThreadId())
+        for kind, which in ((MOUSE_LL, 'mouse'), (KEYBOARD_LL, 'key')):
+            h = u32.SetWindowsHookExW(kind, self.procs[which], None, 0)
+            if h:
+                self.hooks.append(h)
+            else:
+                self.errors.append('SetWindowsHookExW(%d) failed (err %s)' % (kind, k32.GetLastError()))
+        self.ready.set()
+        msg = wt.MSG()
+        while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            pass
+
+    def _stop_hooks(self):
+        if self.pump_tid:
+            u32.PostThreadMessageW(self.pump_tid, WM_QUIT, 0, 0)
+        for h in self.hooks:
+            try:
+                u32.UnhookWindowsHookEx(h)
+            except Exception:
+                pass
+        self.hooks = []
+        pump = self.threads.get('pump')
+        if pump:
+            pump.join(timeout=1.0)
+        self.pump_tid = 0
+
+    def _work(self):
+        while True:
+            ev = self.queue.get()
+            if ev is None:
+                return
+            try:
+                self._resolve(ev)
+            except Exception as e:
+                self._hook_fail('resolve: %s' % e)
+
+    # ---- what was under that click?
+    def _resolve(self, ev):
+        late = (time.perf_counter() - float(ev.get('t') or 0)) > CAPTURE_LATE_S
+        if ev.get('kind') == 'drag':
+            for side in ('from', 'to'):
+                p = ev.get(side) or [0, 0]
+                ev[side + '_target'] = {'xy': [int(p[0]), int(p[1])]} if late else self._target_at(p[0], p[1])
+        else:
+            x, y = int(ev.get('x', 0)), int(ev.get('y', 0))
+            ev['target'] = {'xy': [x, y]} if late else self._target_at(x, y)
+        self.seq += 1
+
+    def _target_at(self, x, y):
+        sel = self._selector_at(int(x), int(y))
+        if sel:
+            return sel
+        img = self._anchor_at(int(x), int(y))
+        return img or {'xy': [int(x), int(y)]}
+
+    def _selector_at(self, x, y):
+        """A selector for the element under (x, y), but only if it re-finds the SAME
+        element and stays small: a big container's centre is not where you clicked."""
+        UIA, client = uia_client()
+        els = guarded(lambda: uia_find(client, UIA, {'point': [x, y]}), 3.0)
+        if not els:
+            return None
+        info = el_info(els[0], UIA)
+        rect = info.get('rect')
+        if not rect or info.get('offscreen'):
+            return None
+        w, h = int(rect[2]) - int(rect[0]), int(rect[3]) - int(rect[1])
+        if w <= 0 or h <= 0 or w * h > MAX_SEL_AREA:
+            return None
+        for key in ('aid', 'name'):
+            v = str(info.get(key) or '').strip()
+            if not v or len(v) > 80 or (key == 'name' and v == self.front_title):
+                continue
+            idx = self._confirm({key: v}, x, y)
+            if idx is not None:
+                return {'uia': {key: v}} if not idx else {'uia': {'selector': {key: v}, 'index': idx}}
+        return None
+
+    def _confirm(self, sel, x, y):
+        UIA, client = uia_client()
+        els = guarded(lambda: uia_find(client, UIA, sel, limit=8, scope=self.scope_hwnd), 3.0)
+        for i, el in enumerate(els):
+            r = el_info(el, UIA).get('rect')
+            if r and r[0] <= x <= r[2] and r[1] <= y <= r[3]:
+                return i
+        return None
+
+    def _anchor_at(self, x, y):
+        """A small picture of the spot, for apps that expose nothing to UIA."""
+        if A is None:
+            return None
+        half = ANCHOR_PX // 2
+        frame = A.ensure(0)
+        h, w = int(frame.shape[0]), int(frame.shape[1])
+        x1, y1 = max(0, x - half), max(0, y - half)
+        x2, y2 = min(w, x + half), min(h, y + half)
+        if x2 - x1 < 24 or y2 - y1 < 24:
+            return None
+        patch = frame[y1:y2, x1:x2]
+        if float(patch.std()) < ANCHOR_MIN_STD:
+            return None                                          # a flat crop matches everywhere
+        d = os.path.join(macros_dir(), '_anchors', self.name)
+        try:
+            from PIL import Image
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, '%02d-%d-%d.png' % (self.seq, x1, y1))
+            Image.fromarray(patch).save(p)
+        except Exception as e:
+            self._hook_fail('anchor: %s' % e)
+            return None
+        return {'image': p}
+
+
+CAP = Capture()
+
+
+@op('capture')
+def o_capture(req):
+    """Record a human demonstration: what = start | stop | status | cancel.
+
+      act.cmd capture start name=calc-demo front_title=计算器   # then just do it by hand
+      act.cmd capture stop                                      # -> a replayable macro
+    """
+    what = req.get('what')
+    if not what:
+        a = req.get('args')
+        what = (a[0] if isinstance(a, list) and a else a) or ''
+    what = str(what).lower()
+    if what in ('start', 'record', 'on'):
+        return CAP.start(req)
+    if what in ('stop', 'end', 'off'):
+        return CAP.stop(req)
+    if what in ('status', 'ls', 'state'):
+        return CAP.status()
+    if what in ('cancel', 'abort', 'discard'):
+        return CAP.cancel()
+    return {'ok': False, 'error': 'capture: what=start|stop|status|cancel, got %r' % (what,)}
 
 
 @op('stop')

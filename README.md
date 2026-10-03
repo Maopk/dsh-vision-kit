@@ -43,6 +43,7 @@ blobs and a vectorised ZNCC pyramid) for canvases and self-drawn UI that UIA can
 | Whole skill: launch Calculator → `7*8` → read 56 → `12+30` → click "=" → read 42 | minutes, dozens of calls | **0.62–0.72 s** (warm) / **1.4 s** (cold UWP launch), **zero pixel reads** |
 | Replay a recorded skill — the same 7 steps again, `macro` | minutes, dozens of calls | **0.30 s**, one call (0.20 s server + 0.10 s client start-up) |
 | Replay one that starts its own app — `launch` first step | open the app by hand, then replay | **one** call from a cold desktop: 2.6 s waiting for the window + 0.22 s of steps |
+| Record it by hand once — `capture start` … demonstrate … `capture stop` | nothing: click through it yourself, once | **4 raw clicks → 4 UIA selectors** (demo 0.23 s), replayed in **0.30 s** |
 
 A run that finished ok can keep itself: `"record": "<name>"` writes it to `$HOME\macros\<name>.json`, and
 `{"op":"macro","what":"run","name":"<name>"}` replays it in **one** call with the same per-step trace.
@@ -59,6 +60,17 @@ the actions but two lookups that stopped repeating: a window resolved from a tit
 (**1371 ms → 3 ms**) and a UIA selector searches its front window first, falling back to the whole
 desktop when it finds nothing (**95 ms vs 1500 ms**) — so a recorded selector stays portable across app
 restarts and still resolves fast.
+
+When there is no macro yet and the flow will repeat, don't drive it from the model at all: name the window,
+demonstrate it once by hand, and let the hooks write the macro —
+`act.cmd capture start name=calc-demo front_title=计算器` … `act.cmd capture stop`.
+Every click is reverse-resolved *while it happens* into a UIA selector (`aid`, else `name`, confirmed to
+still contain the click point), into an image anchor cropped around it when no element fits, and into raw
+coordinates only as a last resort — so a demonstration that was nothing but coordinates comes out
+structural: the four clicks of `7 + 3 =` became `num7Button` / `plusButton` / `num3Button` / `equalButton`.
+Typing, chords, the wheel and drags are recorded the same way, anything outside the watched window is
+dropped and counted (`dropped=`), and the result is an ordinary macro: parameterise it, replay it, or give
+it a `launch`.
 
 Details, the op table, the state layout and eleven hard-won pitfalls
 (`TreeScope_Descendants = 4`, single-STA COM ownership with per-call timeouts, UWP launch

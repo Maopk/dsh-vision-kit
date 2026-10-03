@@ -131,6 +131,36 @@ def fmt(rep, pretty=True):
                 m.get('name'), m.get('steps'), 'can-start' if m.get('launch') else 'hand-start',
                 m.get('replays'), last, m.get('note') or ''))
         return '\n'.join(out)
+    if 'capture' in rep and ('anchors' in rep or 'active' in rep):     # capture start / status
+        if rep.get('active') is False:
+            return 'not recording'
+        where = (rep.get('scope') or {}).get('title') or (rep.get('scope') or {}).get('hwnd')
+        out = ['capture=%s%s' % (rep.get('capture'), ' scope=%s' % where if where else '')]
+        if rep.get('active'):
+            out[0] += ' events=%s dropped=%s pending=%s %sms' % (
+                rep.get('events'), rep.get('dropped'), rep.get('pending'), rep.get('ms'))
+        if rep.get('anchors'):
+            out.append('  anchors: %s' % rep['anchors'])
+        if rep.get('next'):
+            out.append('  -> %s' % rep['next'])
+        return '\n'.join(out)
+    if 'capture' in rep and 'steps' in rep:              # capture stop: a demo became macro steps
+        out = ['capture=%s steps=%s events=%s dropped=%s injected=%s saved=%s' % (
+            rep.get('capture'), rep.get('steps'), rep.get('events'), rep.get('dropped'),
+            rep.get('injected'), rep.get('saved'))]
+        how = rep.get('how') or {}
+        if how:
+            out.append('  aimed: ' + ' '.join('%s=%s' % (k, how[k]) for k in sorted(how)))
+        for t in rep.get('trace') or []:
+            out.append('  %2d %-9s %7sms ok=%s  %s' % (
+                t.get('i'), t.get('op'), t.get('ms'), t.get('ok'), t.get('how') or ''))
+        for n in rep.get('notes') or []:
+            out.append('  note: %s' % n)
+        for f in rep.get('foreign') or []:
+            out.append('  outside: %s' % f)
+        if rep.get('next'):
+            out.append('  -> %s' % rep['next'])
+        return '\n'.join(out)
     if not isinstance(rep.get('trace'), list):
         return json.dumps(rep, ensure_ascii=False)
     head = 'ok=%s steps=%s total=%sms' % (rep.get('ok'), rep.get('steps'), rep.get('total_ms'))

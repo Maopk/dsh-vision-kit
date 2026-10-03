@@ -1,6 +1,6 @@
 ---
 name: drive-a-windows-gui
-description: Use when a task needs a Windows GUI driven by mouse and keyboard (open an app, click through it, type into it, play something) — check for a recorded macro and replay it when the flow repeats, pick the cheapest channel first (config, database, CLI, deep link), then drive the screen with UIA-first targeting, wait_for instead of fixed sleeps, one verifying signal after every action, and loud failure with a screenshot.
+description: Use when a task needs a Windows GUI driven by mouse and keyboard (open an app, click through it, type into it, play something) — check for a recorded macro and replay it when the flow repeats (or have the user demonstrate it once with `capture` when there is none yet), pick the cheapest channel first (config, database, CLI, deep link), then drive the screen with UIA-first targeting, wait_for instead of fixed sleeps, one verifying signal after every action, and loud failure with a screenshot.
 ---
 
 # 驱动 Windows 图形界面（通用）
@@ -81,6 +81,12 @@ description: Use when a task needs a Windows GUI driven by mouse and keyboard (o
   实测（Calculator 冷启动，8 步）：等窗口 2.6 s + 回放 0.22 s，读回「显示为 42」；等窗口的时间标在
   客户端表头 `start=`，和 `front=` 一样**不计入** `total_ms`；应用已开时那一步 0.2 ms、表头 `start=reused`。
 - `launch` 拉起来的窗口还会成为后续步骤的 UIA 搜索范围（`click` 520 → 58 ms，读回显 1342 → 19 ms）。
+- **没有宏可回放、而这个流程还会重复时：让人演示一遍，别自己在像素通道里摸。**
+  `.\actor\act.cmd capture start name=<宏名> front_title=<窗口名片段>` → 请用户自己点/打字一遍 →
+  `.\actor\act.cmd capture stop` → 直接得到一条可回放的宏（每次点击在发生的那一刻反查成 `aid`/`name`
+  选择器，查不到才存图像锚点或坐标，所以演示是"手点坐标进、结构选择器出"）。这通常比模型自己找控件
+  快一个数量级，也是采集「这个控件长什么样、叫什么」最省事的办法：演示完 `act.cmd macro get name=<宏名>`
+  就能看到它记下的选择器。演示只认那个窗口：窗口外的点击丢掉并计入 `dropped=`，演示中途窗口被挪走也不会误录。
 
 ## 6 失败要响
 

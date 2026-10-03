@@ -76,6 +76,7 @@ python actor\skills\demo_calc.py
 | `watch` | 后台按 fps 抓帧做差分（等画面变化，不用轮询） |
 | `run` | **一次调用跑完一整段技能**：`{"op":"run","steps":[{...},{...}]}`，逐步返回 `ms/ok`；加 `"results": true` 则每步自己那份返回也塞进该步的 `data`（长文本截断、长列表保留 6 项 + `…(N more items)`，`frame`/`png` 不带） |
 | `macro` | **录制与回放**：`what=run` 一次调用重放一条宏（步骤在服务端跑完，逐步 `ms` 照旧回来）；`what=list`/`get`/`del`/`save` 管理；`list`/`run` 这类裸词可以直接写成 `act.cmd macro list` |
+| `capture` | **录一场「人演示」**：`capture start name=<宏名> front_title=<窗口名片段>` → 你正常点/打字演示一遍 → `capture stop`，直接得到一条普通宏。低级鼠标/键盘钩子只认你指定的那个窗口：每次点击在**发生的那一刻**反查 UIA 选择器（`aid` 优先，再 `name`，还要验证命中元素仍包含该点），查不到就裁 68×68 图像锚点，纯色块才退回坐标；输入成串记成 `type`、组合键记成 `key`、滚轮记成 `move`+`scroll`、拖动记 `from`/`to`。落在窗口外的点击**丢掉并计数**（`dropped=`），别处的按键也不记。`what=status` 看进度、`cancel` 丢弃不存 |
 | `bench` `log` `stop` | 基准、日志、退出 |
 
 `run` 是省往返的关键：一个技能 = 一次调用，返回逐步 trace。读数据的 op（`uia`/`state`/`probe`/`find`）默认**只回报标量**，要它们的结果就传 `results`——否则得把那个 op 单独再发一次（这就是"一次假设一次往返"的旧毛病）。
@@ -170,6 +171,30 @@ python actor\skills\demo_calc.py
 **等窗口 2.6 s** + 回放 **0.22 s**，读回「显示为 42」；应用已开时那一步 0.2 ms、`start=reused`。
 等窗口的时间标在客户端表头 `start=`，和 `front=` 一样**不在 `total_ms` 里**。`launch` 拉起来的窗口
 还会成为后续步骤的 UIA 搜索范围：`click` 520 → 58 ms，读回显 1342 → 19 ms。
+
+### 让人演示一遍，直接录成宏
+
+不想让模型现场找控件时，可以自己动手演示一次，`capture` 把它记成上面那种普通宏：
+
+```powershell
+.\act.cmd capture start name=calc-demo front_title=计算器   # 只说清楚"看哪个窗口"
+# ……你正常点、正常打字（就这一遍）……
+.\act.cmd capture stop                                        # 得到 $ACTOR_HOME\macros\calc-demo.json
+.\act.cmd macro run name=calc-demo                            # 0.3 秒回放
+```
+
+- 鼠标和键盘走**低级钩子**（`WH_MOUSE_LL` / `WH_KEYBOARD_LL`），钩子里只做一件事：记时间戳入队；
+  反查 UIA 在工作线程里做，所以演示期间**你的输入不会被拖慢**。
+- 范围只认你指定的那个窗口（`front_title` 或 `hwnd`）：别处的按键不记，落在窗口外的点击（窗口被挪过、
+  点到后面那个程序上）**丢掉并计入** `dropped=`——自己的演示录不到桌面上别的东西。
+- 每次点击在**发生的那一刻**反查控件：`aid` 优先、再 `name`，还要验证查到的元素仍包含那个点；查不到就
+  现裁一块 68×68 的图像锚点（纯色块不要），再不行才退回坐标。所以"手点坐标"进、"结构选择器"出。
+- 输入成串记成 `type`、组合键记成 `key`、滚轮记成 `move`+`scroll`（`scroll` 没有 target，得先移过去）、
+  按住拖记成 `drag` 的 `from`/`to`。用输入法打字时钩子拿到的是按键，会给出警告——中文建议粘贴
+  （`Ctrl+V` 会记成一步 `type` + 剪贴板原文），或者录完在宏里直接写 `"text"`。
+- 实测：4 次**纯坐标**点击（7 + 3 =）→ `num7Button` / `plusButton` / `num3Button` / `equalButton`，
+  演示本身 226 ms，回放 0.30 s，读回「显示为 10」；把窗口挪开再回放，结果一样对。
+- `capture status` 看进度（事件数 / 丢弃数 / 待解析），`capture cancel` 丢弃不留档。
 
 ## 写一个技能
 

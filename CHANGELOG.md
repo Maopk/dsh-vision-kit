@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `actor.py` op `capture` — record a demonstration **by hand** and get a macro back:
+  `act.cmd capture start name=calc-demo front_title=计算器`, do it once yourself,
+  `act.cmd capture stop`. Low-level mouse and keyboard hooks watch one window; every click is
+  resolved *at the moment it happens* to a UIA selector (`aid`, else `name`, and only after the
+  element is confirmed to still contain the click point), falling back to a 68×68 image anchor
+  cropped around the point, and to raw coordinates only when that crop is too flat to match on.
+  Typing becomes `type` steps, chords `key` steps, the wheel `move`+`scroll`, drags `from`/`to`,
+  so the result is an ordinary macro: parameterise it, replay it, or give it a `launch`. A click
+  that misses the watched window (it moved, or you hit what is behind it) is **dropped and
+  counted** (`dropped=`), and keys typed elsewhere are ignored, so a demonstration never records
+  the rest of your desktop. Measured: 4 raw coordinate clicks (7 + 3 =) came back as
+  `num7Button` / `plusButton` / `num3Button` / `equalButton` from a 226 ms demonstration, and
+  replayed in 0.30 s with the display reading 「显示为 10」.
 - `actor.py` op `launch` — start a program and, if asked, block until its window exists
   (`wait: "<substring>"` for a window name, `wait_pid: true` for any window of the process).
   `.exe` goes through `subprocess`, `shell:appsFolder\<AUMID>` (UWP) through `explorer.exe`,
