@@ -1,6 +1,6 @@
 ---
 name: drive-a-windows-gui
-description: Use when a task needs a Windows GUI driven by mouse and keyboard (open an app, click through it, type into it, play something) — pick the cheapest channel first (config, database, CLI, deep link), then drive the screen with UIA-first targeting, wait_for instead of fixed sleeps, one verifying signal after every action, and loud failure with a screenshot.
+description: Use when a task needs a Windows GUI driven by mouse and keyboard (open an app, click through it, type into it, play something) — check for a recorded macro and replay it when the flow repeats, pick the cheapest channel first (config, database, CLI, deep link), then drive the screen with UIA-first targeting, wait_for instead of fixed sleeps, one verifying signal after every action, and loud failure with a screenshot.
 ---
 
 # 驱动 Windows 图形界面（通用）
@@ -24,8 +24,9 @@ description: Use when a task needs a Windows GUI driven by mouse and keyboard (o
 - `state uia:true` 一次拿到前台窗口 + 顶层窗口 + 具名元素（名字 / 类型 / 矩形）。
 - 元素有名字就用名字点（`target.uia` 或 `find`），没有才退到坐标。
 - 截图只在两处用：验证「在不在动」（`probe`）、失败取证。
-- Flutter 应用的 UIA 扫描偏慢（实测 1.2–1.7 s），但内容层通常在树里 —— 这个钱值得付；
-  把一张 1920×1290 的 PNG 读进模型更贵。
+- Flutter / Electron 这类自绘界面：UIA 扫描偏慢（实测 1.2–1.7 s），而且**不保证内容层在树里**
+  （`uia find` 找文本输入框曾 0 命中，原因未查清）→ 先花一次 `state uia:true` 探明；
+  树里没有就走像素，别拿着结构选择器反复试。把一张 1920×1290 的 PNG 读进模型更贵，但也没贵到值得试五次。
 
 ## 2 等待：`wait_for` 不是 `sleep`
 
@@ -91,6 +92,18 @@ description: Use when a task needs a Windows GUI driven by mouse and keyboard (o
 - 登录、验证码、支付、不可逆操作 → 交给用户。
 - 目标有原生 CLI 或 API → 回第 0 层。
 - 同一条流程要重复做 → 别每次现场走：**录制一次，之后回放**（§5：命令 + 实测 0.30 s）。
+
+## 8 这套够不着的地方（别硬上，先换路）
+
+- **UAC 提权弹窗 / 安全桌面**：`click`/`type` 发到的是普通桌面，UAC 那个「是/否」够不着（锁屏、
+  Ctrl+Alt+Del 同理）。需要提权的任务：要么请用户点一次，要么走计划任务/服务侧执行。
+- **独占全屏的游戏 / DirectX 画面**：UIA 没有树，GDI 抓帧可能整张黑 → 先让目标切成窗口化或无边框，
+  再走像素通道；还是黑就说明抓帧这条路不通，别反复截。
+- **没有交互式会话时**（锁屏、RDP 断开、切换用户）：actor 的键鼠和抓帧都停摆。
+- **用户正在用这台电脑时**：只有一个 actor，而且它必须抢前台 → 长流程会和用户抢焦点，
+  要么挑用户不在的时候，要么先问一句。
+- **op 表里还没有的**：剪贴板读写、IME 组合输入（中日韩输入法候选框）、跨应用拖放、
+  多显示器坐标系（目前按虚拟屏绝对坐标算）。需要就说，别用 `type` 硬凑。
 
 ## 附录 A：本机事实（以及怎么重新发现）
 
