@@ -72,6 +72,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   it was. This closes the gap that made every reader op (`uia`, `state`, `probe`, `find`) cost a
   second call: in the measured 280 s GUI task, 10 of 32 tool calls were precisely that.
 
+- **Record once, replay in one call** (`macro`): a `run` that finishes ok can keep itself —
+  `"record": "<name>"` writes it to `$ACTOR_HOME\macros\<name>.json` (`overwrite: true` replaces an
+  existing name, a failed run answers `saved: false` plus the step that broke it), and
+  `{"op":"macro","what":"run","name":"<name>"}` replays it in **one** call, with the same per-step
+  trace and `total_ms`. `macro list | get | del | save` manage the set; a daemon keeps its last 8 runs
+  addressable, so `save from: last|<run id>` can also turn a run that has already happened into a macro.
+  Steps are templates: `{{name}}` reads the macro's `args` (defaults stored in the macro, overridable
+  per replay) or any earlier step's reply captured with `as: "x"` — `{{disp.hits.0.name}}`. A string
+  that is exactly one placeholder returns the value itself, so a captured rect can serve as a target;
+  `"literal": true` leaves a step untouched, `dry: true` expands without executing.
+  Measured on Calculator, 7 steps (raise window → click the display → Esc → type → Enter → read the
+  display back → unpin): record 1.8 s, replay **0.30 s** wall (0.20 s server + 0.10 s client start),
+  three replays returning 56 / 579 / 81 — one call each instead of seven.
+
 ### Fixed
 
 - `act.py` accepts the spelling the README always used: a bare existing `<file>.json` as the first
@@ -123,6 +137,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Changed
 
+- Two lookups that used to cost ~1.2–1.5 s *per step* are now ~0, which is what makes a replay fast
+  rather than merely automatic. A window resolved from `title_contains` is remembered and re-validated
+  with two Win32 calls instead of a UIA walk of the whole desktop (**1371 ms → 3 ms**; dropped when the
+  window dies or is closed through the actor, and an empty Win32 title — Flutter, Electron, UWP shells —
+  does not invalidate an entry that UIA resolved). A UIA selector searches the run's front window first
+  (**95 ms**) and falls back to the whole desktop (**1500 ms**) when it finds nothing, so a selector
+  recorded without an `hwnd` stays portable *and* fast. `run` / `macro run` resolve their front window
+  once and hand it to every step as `scope_hwnd`; `click` / `move` / `drag` targets, `uia` and `find`
+  honour it too. The same 7 steps: record 10.3 s → 4.6 s → **1.8 s**, replay 2.8 s (window cache alone)
+  → **0.30 s**.
 - `actor/README.md` gained two pitfalls from an end-to-end screen-driving session: JSON handed to
   `act.cmd` from PowerShell arrives without its inner quotes (call `act.py` instead, or pass a
   request file), and a web editor already has focus when it loads — pasting, clicking the editor

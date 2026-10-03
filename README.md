@@ -41,6 +41,18 @@ blobs and a vectorised ZNCC pyramid) for canvases and self-drawn UI that UIA can
 | Full-screen 60×60 template match | 573 ms | **83 ms** |
 | Protocol round trip / client start-up | — | **12 ms / 107 ms** |
 | Whole skill: launch Calculator → `7*8` → read 56 → `12+30` → click "=" → read 42 | minutes, dozens of calls | **0.62–0.72 s** (warm) / **1.4 s** (cold UWP launch), **zero pixel reads** |
+| Replay a recorded skill — the same 7 steps again, `macro` | minutes, dozens of calls | **0.30 s**, one call (0.20 s server + 0.10 s client start-up) |
+
+A run that finished ok can keep itself: `"record": "<name>"` writes it to `$HOME\macros\<name>.json`, and
+`{"op":"macro","what":"run","name":"<name>"}` replays it in **one** call with the same per-step trace.
+Steps are templates — `{{arg}}` comes from the macro's stored defaults or overrides passed at replay
+time, and `as: "x"` captures a step's reply for later steps (`{{disp.hits.0.name}}`); a string that is
+exactly one placeholder returns the value itself, so a captured rect can be a target. Recording the
+7 steps above took 1.8 s; three replays returned 56 / 579 / 81 in 0.30 s each. Most of that is not
+the actions but two lookups that stopped repeating: a window resolved from a title is remembered
+(**1371 ms → 3 ms**) and a UIA selector searches its front window first, falling back to the whole
+desktop when it finds nothing (**95 ms vs 1500 ms**) — so a recorded selector stays portable across app
+restarts and still resolves fast.
 
 Details, the op table, the state layout and eleven hard-won pitfalls
 (`TreeScope_Descendants = 4`, single-STA COM ownership with per-call timeouts, UWP launch

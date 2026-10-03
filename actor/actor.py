@@ -12,10 +12,10 @@ One long-lived process owns:
 The model sends a *skill*, not a single step; the loop lives in here.
 
 Protocol: TCP 127.0.0.1:<port>, one JSON request per line, one JSON reply per line.
-Ops: ping shot save find click move drag type key scroll uia window wait_for watch state probe log bench run stop
+Ops: ping shot save find click move drag type key scroll uia window wait_for watch state probe log bench run macro stop
 (kept in step with the @op(...) decorators by tools/check-skill-ops.py, which runs in CI)
 """
-import argparse, ctypes, json, os, queue, socketserver, sys, threading, time, traceback
+import argparse, collections, ctypes, json, os, queue, re, socketserver, sys, threading, time, traceback
 from ctypes import wintypes as wt
 
 try:
@@ -556,8 +556,19 @@ def walk(el, UIA, depth, limit, out, view):
             break
 
 
-def uia_find(client, UIA, sel, limit=40, root=None):
-    """sel: name / name_contains / aid / cls / ctype / hwnd / point."""
+def uia_find(client, UIA, sel, limit=40, root=None, scope=None):
+    """sel: name / name_contains / aid / cls / ctype / hwnd / point.
+
+    scope: an hwnd to search INSIDE first. A window-scoped FindAll measures ~95 ms
+    against ~1.5 s for the desktop-wide one, and a selector recorded without an hwnd
+    stays portable: nothing found inside the scope falls back to the whole desktop,
+    so the result is never narrower than an unscoped search.
+    """
+    scoped = False
+    if root is None and scope and not sel.get('point') and not sel.get('hwnd'):
+        el = client.ElementFromHandle(wt.HWND(int(scope)))
+        if el is not None:
+            root, scoped = el, True
     root = root or client.GetRootElement()
     if sel.get('point'):
         el = client.ElementFromPoint(wt.POINT(int(sel['point'][0]), int(sel['point'][1])))
@@ -591,6 +602,8 @@ def uia_find(client, UIA, sel, limit=40, root=None):
     if sel.get('name_contains'):
         needle = sel['name_contains']
         els = [e for e in els if needle in (el_info(e, UIA)['name'] or '')]
+    if not els and scoped:                 # never narrower than the unscoped search
+        return uia_find(client, UIA, sel, limit=limit, root=client.GetRootElement())
     return els
 
 
@@ -613,6 +626,49 @@ def windows(client, UIA, limit=60):
     except Exception:
         pass
     return out
+
+
+WINDOW_CACHE: dict = {}          # title substring -> hwnd (see resolve_hwnd)
+
+
+def _hwnd_valid(hwnd, title_contains=None):
+    """Is this still a live window, and does its title still match? Two Win32 calls
+    (microseconds) instead of the ~1.2 s UIA desktop walk."""
+    u = ctypes.windll.user32
+    hwnd = int(hwnd or 0)
+    if not hwnd or not u.IsWindow(wt.HWND(hwnd)):
+        return False
+    if not title_contains:
+        return True
+    buf = ctypes.create_unicode_buffer(512)
+    u.GetWindowTextW(wt.HWND(hwnd), buf, 512)
+    # Shell-hosted apps (Flutter/Electron/UWP) often keep an EMPTY Win32 title while
+    # UIA reports a name, so an empty title must not invalidate a UIA-resolved entry.
+    return (not buf.value) or (title_contains in buf.value)
+
+
+def resolve_hwnd(hwnd=0, title_contains=None, limit=80, timeout=4.0):
+    """hwnd, or the first window whose UIA name contains title_contains.
+
+    The UIA walk is the single most expensive thing a step can do (~1.2 s), and a run
+    or a macro replay repeats it for EVERY input step just to re-raise the target.
+    Resolve once, then re-validate cheaply for as long as the window lives.
+    """
+    hwnd = int(hwnd or 0)
+    if hwnd:
+        return hwnd
+    if not title_contains:
+        return 0
+    hit = WINDOW_CACHE.get(title_contains)
+    if hit and _hwnd_valid(hit, title_contains):
+        return int(hit)
+    UIA, client = uia_client()
+    for w in guarded(lambda: windows(client, UIA, limit), timeout):
+        if title_contains in (w.get('name') or ''):
+            WINDOW_CACHE[title_contains] = int(w['hwnd'])
+            return int(w['hwnd'])
+    WINDOW_CACHE.pop(title_contains, None)
+    return 0
 
 
 # --------------------------------------------------------------- vision (fallback)
@@ -827,7 +883,8 @@ class Actor:
                         return {'ok': True, 'ms': round(elapsed, 1), 'hit': hits[0]}
                 elif kind in ('uia', 'gone'):
                     UIA, client = uia_client()
-                    els = guarded(lambda client=client, UIA=UIA: uia_find(client, UIA, cond['selector'], 5), 4.0)
+                    els = guarded(lambda client=client, UIA=UIA: uia_find(
+                        client, UIA, cond['selector'], 5, scope=cond.get('scope_hwnd')), 4.0)
                     if (kind == 'uia' and els) or (kind == 'gone' and not els):
                         return {'ok': True, 'ms': round(elapsed, 1), 'n': len(els)}
             except Exception as e:
@@ -859,8 +916,13 @@ class Actor:
 A = None          # the singleton Actor
 
 
-def resolve_target(t, actor):
-    """target: {xy:[x,y]} | {uia:{selector,index}} | {image:'path'} | {color:[r,g,b]}"""
+def resolve_target(t, actor, scope=None):
+    """target: {xy:[x,y]} | {uia:{selector,index}} | {image:'path'} | {color:[r,g,b]}
+
+    scope: hwnd to search first for a `uia` target (see uia_find). A run or a macro
+    replay passes the front window down, so a selector recorded WITHOUT an hwnd stays
+    portable across app restarts and still resolves in ~95 ms instead of ~1.5 s.
+    """
     if not t:
         raise ValueError('no target')
     if 'xy' in t:
@@ -869,7 +931,7 @@ def resolve_target(t, actor):
         UIA, client = uia_client()
         sel = t['uia'].get('selector', t['uia'])
         idx = int(t['uia'].get('index', 0))
-        els = guarded(lambda: uia_find(client, UIA, sel), 4.0)
+        els = guarded(lambda: uia_find(client, UIA, sel, scope=scope or t.get('scope_hwnd')), 4.0)
         if len(els) <= idx:
             raise LookupError('uia target not found (matched %d): %s' % (len(els), sel))
         info = el_info(els[idx], UIA)
@@ -935,7 +997,8 @@ def o_find(req):
         hits = find_color(f, req['color'], req.get('tol', 40), req.get('min_area', 80), req.get('region'))
     elif req.get('uia'):
         UIA, client = uia_client()
-        els = guarded(lambda: uia_find(client, UIA, req['uia'], req.get('max', 40)), req.get('timeout', 4.0))
+        els = guarded(lambda: uia_find(client, UIA, req['uia'], req.get('max', 40),
+                                      scope=req.get('scope_hwnd')), req.get('timeout', 4.0))
         hits = [el_info(e, UIA) for e in els]
     else:
         raise ValueError('find needs image|color|uia')
@@ -946,7 +1009,7 @@ def o_find(req):
 def o_click(req):
     t0 = time.perf_counter()
     fr = _maybe_front(req)
-    pos, how = resolve_target(req.get('target'), A)
+    pos, how = resolve_target(req.get('target'), A, req.get('scope_hwnd'))
     r = A.hands.click(pos[0], pos[1], req.get('button', 'left'), int(req.get('n', 1)), req.get('gap_ms', 60),
                       req.get('ease', False), req.get('settle_ms', 25))
     out = {'ok': True, 'at': pos, 'how': how, 'click': r, 'ms': round((time.perf_counter() - t0) * 1000, 1)}
@@ -959,7 +1022,7 @@ def o_click(req):
 def o_move(req):
     fr = _maybe_front(req)
     if req.get('target'):
-        pos, how = resolve_target(req['target'], A)
+        pos, how = resolve_target(req['target'], A, req.get('scope_hwnd'))
     else:
         pos, how = [int(req['x']), int(req['y'])], {'how': 'xy'}
     out = {'ok': True, 'at': pos, 'how': how,
@@ -973,11 +1036,11 @@ def o_move(req):
 def o_drag(req):
     fr = _maybe_front(req)
     if req.get('from'):
-        p1, _ = resolve_target(req['from'], A)
+        p1, _ = resolve_target(req['from'], A, req.get('scope_hwnd'))
     else:
         p1 = [int(req['x1']), int(req['y1'])]
     if req.get('to'):
-        p2, _ = resolve_target(req['to'], A)
+        p2, _ = resolve_target(req['to'], A, req.get('scope_hwnd'))
     else:
         p2 = [int(req['x2']), int(req['y2'])]
     r = A.hands.drag(p1[0], p1[1], p2[0], p2[1], req.get('steps', 30), req.get('ms', 240), req.get('button', 'left'))
@@ -1021,7 +1084,8 @@ def o_uia(req):
     if what == 'windows':
         return {'ok': True, 'windows': guarded(lambda: windows(client, UIA, req.get('max', 60)), to)}
     if what == 'find':
-        els = guarded(lambda: uia_find(client, UIA, req['selector'], req.get('max', 40)), to)
+        els = guarded(lambda: uia_find(client, UIA, req['selector'], req.get('max', 40),
+                                       scope=req.get('scope_hwnd')), to)
         return {'ok': True, 'n': len(els), 'hits': [el_info(e, UIA) for e in els]}
     if what == 'point':
         el = guarded(lambda: client.ElementFromPoint(wt.POINT(int(req['x']), int(req['y']))), to)
@@ -1031,7 +1095,8 @@ def o_uia(req):
         if req.get('hwnd'):
             root = guarded(lambda: client.ElementFromHandle(wt.HWND(int(req['hwnd']))), to)
         elif req.get('selector'):
-            els = guarded(lambda: uia_find(client, UIA, req['selector'], 1), to)
+            els = guarded(lambda: uia_find(client, UIA, req['selector'], 1,
+                                           scope=req.get('scope_hwnd')), to)
             root = els[0] if els else None
         if root is None:
             root = guarded(lambda: client.GetRootElement(), to)
@@ -1041,7 +1106,8 @@ def o_uia(req):
         guarded(lambda: walk(root, UIA, int(req.get('depth', 3)), int(req.get('limit', 300)), out, req.get('view', 'raw')), to)
         return {'ok': True, 'n': len(out), 'tree': [dict(depth=d, **el_info(e, UIA)) for d, e in out]}
     if what in ('invoke', 'focus', 'setvalue'):
-        els = guarded(lambda: uia_find(client, UIA, req['selector'], req.get('max', 5)), to)
+        els = guarded(lambda: uia_find(client, UIA, req['selector'], req.get('max', 5),
+                                       scope=req.get('scope_hwnd')), to)
         idx = int(req.get('index', 0))
         if len(els) <= idx:
             raise LookupError('no element %d for %s' % (idx, req['selector']))
@@ -1075,11 +1141,7 @@ def o_window(req):
     mode = req.get('mode', 'front')
     hwnd = int(req.get('hwnd') or 0)
     if not hwnd and req.get('title_contains'):
-        UIA, client = uia_client()
-        for w in guarded(lambda: windows(client, UIA, 80), 4.0):
-            if req['title_contains'] in (w.get('name') or ''):
-                hwnd = int(w['hwnd'])
-                break
+        hwnd = resolve_hwnd(title_contains=req['title_contains'], limit=80, timeout=4.0)
     if not hwnd:
         raise LookupError('window: pass hwnd= or title_contains=')
 
@@ -1099,6 +1161,9 @@ def o_window(req):
         return {'ok': True, 'mode': 'info', **info()}
     if mode == 'close':
         u.PostMessageW(wt.HWND(hwnd), 0x0010, 0, 0)                 # WM_CLOSE
+        for k, v in list(WINDOW_CACHE.items()):                     # a dead window must
+            if int(v) == hwnd:                                      # not stay cached
+                WINDOW_CACHE.pop(k, None)
         return {'ok': True, 'mode': 'close', **info()}
     if mode == 'max':
         u.ShowWindow(wt.HWND(hwnd), 3)
@@ -1364,23 +1429,166 @@ def _slim(v, budget):
     return v
 
 
-@op('run')
-def o_run(req):
-    """One call = one skill. steps: list of ops; stops on the first error unless continue_on_error.
+# ------------------------------------------------------ macros: record once, replay
+# The expensive part of a GUI task is the model's round trips, not the pixels: one `run`
+# already executes a whole skill server-side.  A macro freezes such a run, so the second
+# time the same flow is needed it costs one call instead of thirty.
+MACRO_SCHEMA = 'dsh-actor-macro/1'
+MACRO_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
+VAR_RE = re.compile(r'\{\{\s*([A-Za-z_][A-Za-z0-9_.\-]*)\s*\}\}')
+RUN_KEEP = 8                      # finished runs of this daemon that can still be recorded
+RUNS: collections.deque = collections.deque(maxlen=RUN_KEEP)
+RUN_SEQ = 0
+INPUT_OPS = frozenset(('click', 'move', 'drag', 'type', 'key', 'scroll'))
 
-    `results: true` (or a number = characters per string) folds each step's own reply into its
-    trace entry as `data`, so a run that reads structure does not need a second call per reader.
+
+def _dict(v):
+    """A dict, or {} - the one-shot CLI stuffs bare words into `args` as a list."""
+    return dict(v) if isinstance(v, dict) else {}
+
+
+def macros_dir():
+    d = os.path.join(HOME, 'macros')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def macro_path(name):
+    """One file per macro, $ACTOR_HOME/macros/<name>.json: greppable, diffable, portable."""
+    if not MACRO_NAME_RE.match(str(name or '')):
+        raise ValueError('bad macro name %r: letters, digits, dot, dash, underscore, max 64' % (name,))
+    return os.path.join(macros_dir(), str(name) + '.json')
+
+
+def macro_read(name):
+    with open(macro_path(name), encoding='utf-8') as f:
+        doc = json.load(f)
+    if not isinstance(doc, dict) or not doc.get('steps'):
+        raise ValueError('macro %r has no steps' % (name,))
+    return doc
+
+
+def macro_write(doc):
+    p = macro_path(doc['name'])
+    tmp = p + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(doc, f, ensure_ascii=False, indent=1)
+        f.write('\n')
+    os.replace(tmp, p)
+    return p
+
+
+def macro_index():
+    """Every macro, one line each - what a later session needs to pick one up."""
+    out = []
+    d = macros_dir()
+    for fn in sorted(os.listdir(d)):
+        if not fn.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(d, fn), encoding='utf-8') as f:
+                doc = json.load(f)
+        except Exception:
+            out.append({'name': fn[:-5], 'error': 'unreadable'})
+            continue
+        st = doc.get('stats') or {}
+        out.append({'name': doc.get('name', fn[:-5]), 'steps': len(doc.get('steps') or []),
+                    'args': sorted(_dict(doc.get('args')).keys()),
+                    'created': doc.get('created'), 'updated': doc.get('updated'),
+                    'note': (doc.get('note') or '')[:60], 'replays': st.get('replays', 0),
+                    'last_ms': st.get('last_ms'), 'last_ok': st.get('last_ok'),
+                    'last_at': st.get('last_at')})
+    return out
+
+
+def _front_now():
+    """Title of the foreground window right now - a hint kept with a recording."""
+    try:
+        if A is None:
+            return None
+        return (_win_info(ctypes.windll.user32.GetForegroundWindow()) or {}).get('title')
+    except Exception:
+        return None
+
+
+def _lookup(ctx, path):
+    cur = ctx
+    for part in path.split('.'):
+        if isinstance(cur, (list, tuple)):
+            cur = cur[int(part)]
+        elif isinstance(cur, dict):
+            if part not in cur:
+                raise KeyError('no key %r' % part)
+            cur = cur[part]
+        else:
+            raise KeyError('%s has no %r' % (type(cur).__name__, part))
+    return cur
+
+
+def _resolve(ctx, path, where):
+    try:
+        return _lookup(ctx, path)
+    except Exception as e:
+        raise ValueError('%s: {{%s}} %s' % (where or 'step', path, e)) from None
+
+
+def interp(v, ctx, where=''):
+    """`{{name.path}}` inside any string of a step.
+
+    A string that is nothing but one placeholder becomes the value itself, so a list can
+    stand in for a coordinate; inside a longer string it is inlined as JSON.  A step that
+    must carry literal braces sets "literal": true and is left alone.
+    """
+    if isinstance(v, str):
+        one = VAR_RE.fullmatch(v)
+        if one:
+            return _resolve(ctx, one.group(1), where)
+        if '{{' not in v:
+            return v
+
+        def sub(m):
+            got = _resolve(ctx, m.group(1), where)
+            return got if isinstance(got, str) else json.dumps(got, ensure_ascii=False)
+        return VAR_RE.sub(sub, v)
+    if isinstance(v, dict):
+        return {k: interp(x, ctx, where) for k, x in v.items()}
+    if isinstance(v, list):
+        return [interp(x, ctx, where) for x in v]
+    return v
+
+
+def exec_steps(steps, req, ctx=None):
+    """The loop behind `run` and `macro run`: one call, many ops, one trace entry each.
+
+    `results: true` (or a number = characters per string) folds each step's own reply into
+    its trace entry as `data`, so a step that reads structure does not need a second call.
     Without it the trace stays as it was: index, op, ms, ok and a few scalar extras.
+
+    `as: <name>` keeps a step's whole reply in the variable namespace; any later step may
+    reach it as `{{<name>.a.b}}` (list indexes are just numbers: `{{hit.hits.0.center}}`).
+    The request's `args` seed that namespace, and a top-level `front`/`front_title` is
+    applied to every input step that does not name a window itself.
     """
     trace = []
-    t0 = time.perf_counter()
+    ctx = dict(ctx or {})
     results = req.get('results')
     budget = 400 if results is True else (
         int(results) if isinstance(results, (int, float)) and results > 0 else 0)
-    for i, st in enumerate(req.get('steps', [])):
-        name = st.get('op')
+    top_front = req.get('front') is not None or req.get('front_title') is not None
+    # The front window is also the best search scope for every UIA selector in this run:
+    # resolved once here (then cached), so each step searches ONE window (~95 ms) instead
+    # of the whole desktop (~1.5 s). A step that brings its own scope/hwnd keeps it.
+    scope_hwnd = resolve_hwnd(req.get('front'), req.get('front_title')) if top_front else 0
+    for i, raw in enumerate(steps):
+        name = raw.get('op')
         t1 = time.perf_counter()
         try:
+            st = raw if raw.get('literal') else interp(raw, ctx, 'step %d' % i)
+            if top_front and name in INPUT_OPS and st.get('front') is None and not st.get('front_title'):
+                st['front'] = req.get('front')
+                st['front_title'] = req.get('front_title')
+            if scope_hwnd and st.get('scope_hwnd') is None:
+                st['scope_hwnd'] = scope_hwnd
             if name == 'sleep':
                 time.sleep(float(st.get('ms', 100)) / 1000.0)
                 res = {'ok': True, 'slept_ms': st.get('ms', 100)}
@@ -1402,10 +1610,154 @@ def o_run(req):
             if data:
                 entry['data'] = _slim(data, budget)
         trace.append(entry)
+        if entry['ok'] and raw.get('as'):
+            ctx[str(raw['as'])] = res
         if not entry['ok'] and not req.get('continue_on_error'):
             break
-    return {'ok': all(t['ok'] for t in trace), 'steps': len(trace),
-            'total_ms': round((time.perf_counter() - t0) * 1000, 1), 'trace': trace}
+    return trace, ctx
+
+
+@op('run')
+def o_run(req):
+    """One call = one skill. steps: list of ops; stops on the first error unless continue_on_error.
+
+    `as` on a step plus `{{name.path}}` in a later one makes the skill parameterised, and
+    `record: <name>` freezes exactly these steps as a macro once the run has finished ok
+    (see the `macro` op).  Every run also lands in this daemon's run history, so a flow that
+    worked can be recorded afterwards without having planned for it: `macro save`.
+    """
+    global RUN_SEQ
+    t0 = time.perf_counter()
+    steps = list(req.get('steps') or [])
+    trace, _ctx = exec_steps(steps, req, _dict(req.get('args')))
+    ok = all(t['ok'] for t in trace)
+    RUN_SEQ += 1
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    RUNS.append({'id': RUN_SEQ, 'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'ok': ok,
+                 'ms': ms, 'steps': steps, 'front': _front_now()})
+    out = {'ok': ok, 'steps': len(trace), 'total_ms': ms, 'trace': trace, 'run_id': RUN_SEQ}
+    if req.get('record'):
+        out['recorded'] = _record(req['record'], req, steps, ms=ms, run_id=RUN_SEQ,
+                                  overwrite=bool(req.get('overwrite')),
+                                  failed_at=next((t['i'] for t in trace if not t['ok']), None)) \
+            if ok else {'saved': False, 'why': 'the run did not finish ok',
+                        'failed_step': next((t['i'] for t in trace if not t['ok']), None)}
+    return out
+
+
+def _record(name, req, steps, ms=0, run_id=None, overwrite=False, failed_at=None):
+    """Freeze a run's steps as a named macro; never clobbers one without overwrite."""
+    p = macro_path(name)
+    if os.path.exists(p) and not overwrite:
+        return {'saved': False, 'path': p, 'why': 'macro %r already exists - add overwrite: true '
+                                                  'to replace it' % (name,)}
+    now = time.strftime('%Y-%m-%dT%H:%M:%S')
+    created = now
+    if os.path.exists(p):
+        try:
+            created = macro_read(name).get('created', now)
+        except Exception:
+            pass
+    captured = {str(s['as']) for s in steps if isinstance(s, dict) and s.get('as')}
+    doc = {'schema': MACRO_SCHEMA, 'name': name, 'created': created, 'updated': now,
+           'steps': steps, 'args': {k: v for k, v in _dict(req.get('args')).items() if k not in captured},
+           'front': req.get('macro_front') or None, 'note': req.get('note') or '',
+           'from_run': {'id': run_id, 'ms': ms, 'front': _front_now()},
+           'stats': {'replays': 0}}
+    return {'saved': True, 'name': name, 'steps': len(steps), 'path': macro_write(doc),
+            'failed_step': failed_at}
+
+
+def _save_macro(req):
+    steps = req.get('steps')
+    rec = None
+    if not steps:
+        src = req.get('from', 'last')
+        if isinstance(src, str) and src not in ('last', 'latest'):
+            rec = next((r for r in RUNS if str(r['id']) == src), None)
+        else:
+            rec = RUNS[-1] if RUNS else None
+        if rec is None:
+            raise ValueError('no run of this daemon to record from (it keeps the last %d); '
+                             'pass steps directly, or run the flow once first' % RUN_KEEP)
+        steps = rec['steps']
+    if not steps:
+        raise ValueError('nothing to save: give steps, or run something first')
+    out = _record(req.get('name'), req, steps, ms=(rec or {}).get('ms', 0),
+                  run_id=(rec or {}).get('id'), overwrite=bool(req.get('overwrite')))
+    if rec:
+        out['from_run'] = {'id': rec['id'], 'ok': rec['ok'], 'ms': rec['ms'], 'at': rec['at']}
+    return out
+
+
+def _run_macro(req):
+    """One call replays the whole macro: re-resolved variables, per-step ms, one trace."""
+    doc = macro_read(req['name'])
+    args = _dict(doc.get('args'))
+    args.update(_dict(req.get('args')))
+    steps = doc.get('steps') or []
+    if req.get('dry'):
+        ctx = dict(args)
+        return {'ok': True, 'macro': doc['name'], 'dry': True, 'args': args,
+                'steps': [interp(s, ctx, 'step %d' % i) for i, s in enumerate(steps)]}
+    front = _dict(req.get('front')) or _dict(doc.get('front')) or None
+    eff = dict(req)
+    fronted = None
+    if front:
+        eff['front'] = front.get('hwnd')
+        eff['front_title'] = front.get('title_contains')
+        fronted = _front(front.get('hwnd'), front.get('title_contains'), front.get('top', True))
+    t0 = time.perf_counter()
+    trace, _ctx = exec_steps(steps, eff, dict(args))
+    ok = all(t['ok'] for t in trace)
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    st = dict(doc.get('stats') or {})
+    st.update({'replays': int(st.get('replays', 0)) + 1, 'last_ms': ms, 'last_ok': ok,
+               'last_at': time.strftime('%Y-%m-%dT%H:%M:%S')})
+    doc['stats'] = st
+    try:
+        macro_write(doc)
+    except Exception as e:                       # a replay must not fail over bookkeeping
+        log('macro.stats_fail', name=doc.get('name'), err=str(e))
+    out = {'ok': ok, 'macro': doc['name'], 'steps': len(trace), 'total_ms': ms, 'trace': trace,
+           'args': args, 'replays': st['replays'], 'front': fronted,
+           'recorded_ms': (doc.get('from_run') or {}).get('ms')}
+    failed = next((t['i'] for t in trace if not t['ok']), None)
+    if failed is not None:
+        out['failed_step'] = failed
+        out['hint'] = ('step %s broke the replay: run that part by hand with results=true, then '
+                       'record the macro again' % failed)
+    return out
+
+
+@op('macro')
+def o_macro(req):
+    """Recorded skills: what list | get | run | save | del   (`act.cmd macro list` works too).
+
+    save : {name, from: 'last'|<run id>, overwrite} or {name, steps}, plus optional args/note
+           - `from` defaults to this daemon's most recent run, so a flow that just worked is
+           one call away from being a macro.
+    run  : {name, args: {...}, results: true, front: {...}, dry}
+           - one call replays every step; `dry` expands the templates without touching
+           anything, which is how you debug a `{{var}}` that no longer resolves.
+    """
+    what = req.get('what')
+    if not isinstance(what, str):
+        a = req.get('args')
+        what = a[0] if isinstance(a, list) and a and isinstance(a[0], str) else 'list'
+    if what in ('list', 'ls'):
+        return {'ok': True, 'dir': macros_dir(), 'n': len(macro_index()), 'macros': macro_index()}
+    if what in ('get', 'show'):
+        return {'ok': True, 'macro': macro_read(req['name'])}
+    if what in ('del', 'rm'):
+        p = macro_path(req['name'])
+        os.remove(p)
+        return {'ok': True, 'deleted': req['name'], 'path': p}
+    if what == 'save':
+        return _save_macro(req)
+    if what == 'run':
+        return _run_macro(req)
+    raise ValueError('macro needs what=list|get|run|save|del, got %r' % (what,))
 
 
 @op('stop')

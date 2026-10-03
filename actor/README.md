@@ -74,6 +74,7 @@ python actor\skills\demo_calc.py
 | `wait_for` | 轮询条件（元素出现、颜色出现、模板出现），带超时 |
 | `watch` | 后台按 fps 抓帧做差分（等画面变化，不用轮询） |
 | `run` | **一次调用跑完一整段技能**：`{"op":"run","steps":[{...},{...}]}`，逐步返回 `ms/ok`；加 `"results": true` 则每步自己那份返回也塞进该步的 `data`（长文本截断、长列表保留 6 项 + `…(N more items)`，`frame`/`png` 不带） |
+| `macro` | **录制与回放**：`what=run` 一次调用重放一条宏（步骤在服务端跑完，逐步 `ms` 照旧回来）；`what=list`/`get`/`del`/`save` 管理；`list`/`run` 这类裸词可以直接写成 `act.cmd macro list` |
 | `bench` `log` `stop` | 基准、日志、退出 |
 
 `run` 是省往返的关键：一个技能 = 一次调用，返回逐步 trace。读数据的 op（`uia`/`state`/`probe`/`find`）默认**只回报标量**，要它们的结果就传 `results`——否则得把那个 op 单独再发一次（这就是"一次假设一次往返"的旧毛病）。
@@ -118,6 +119,46 @@ python actor\skills\demo_calc.py
 同样的「读状态 → 输入 150 字符 → 校验」，从 4 次调用 ≈ 6 s 降到 **622 ms**（`tests/verify_type.py` 里有 A/B 对照与墨迹图）。
 
 慢的从来不是鼠标（一次点击 33–46 ms），而是**编排**：每步新起 pwsh + 冷启 python + 截一张图 + 盲等。
+
+### 录制一次，之后回放
+
+第二次做同一条流程，就别再让模型走第二遍：跑成功的 `run` 可以自己留下。
+
+```json
+{"op":"run","record":"calc-eval","results":true,"front_title":"计算器",
+ "args":{"expr":"7*8"},
+ "steps":[
+   {"op":"window","mode":"front","title_contains":"计算器"},
+   {"op":"click","target":{"uia":{"selector":{"aid":"CalculatorResults"}}}},
+   {"op":"key","key":"esc"},
+   {"op":"type","text":"{{expr}}"},
+   {"op":"key","key":"enter"},
+   {"op":"uia","what":"find","selector":{"aid":"CalculatorResults"},"as":"disp"},
+   {"op":"window","mode":"untop","title_contains":"计算器"}
+ ]}
+```
+
+```powershell
+.\act.cmd run D:\DSH\dsh-actor\tmp\calc.json          # 跑完且每步 ok → 存成 $ACTOR_HOME\macros\calc-eval.json
+.\act.cmd macro list                                  # 名字 / 步数 / 回放次数 / 上次耗时 / FAILED
+.\act.cmd '{"op":"macro","what":"run","name":"calc-eval","args":{"expr":"9*9"},"results":true}'
+.\act.cmd macro what=del name=calc-eval               # 也支持 save（from: last|<run_id>）
+```
+
+- 宏是普通 JSON：`steps` + `args`（默认参数）+ `front` + `note` + `stats`，可读可改可进 git。
+- `{{expr}}` 取 `args`，也取前面某步 `as: "disp"` 存下的返回（`{{disp.hits.0.name}}`）；
+  **整串就是一个占位符时直接返回原值**，所以捕获到的 `rect`/`bounds` 能当坐标用。`"literal": true` 整步不展开。
+- 回放失败会补 `failed_step` 和 `hint`；`dry: true` 只展开不执行，用来检查参数。
+- 实测（上面这 7 步，Calculator）：录制 1.8 s，回放 **0.30 s**（服务端 0.20 + 客户端 0.10），三次分别得 56 / 579 / 81。
+  等价的手工路线是 7 次往返 × (模型延迟 + 每步 1.2–2.6 s 的 UIA 扫描)。
+
+回放快不是因为它"记住了像素"，而是因为这次不再重复两次查找：**窗口按标题只解析一次**
+（`title_contains` 命中后缓存，重解析只要两次 Win32 调用：1371 ms → **3 ms**，窗口关掉或走 `window mode=close` 才失效），
+**UIA 选择器先在当前窗口内找**（95 ms）再退回全桌面（1500 ms）——`run`/`macro run` 解析一次前台窗口后
+用 `scope_hwnd` 发给每一步，`click`/`move`/`drag` 的 target 与 `uia`/`find` 都认这个字段。
+所以录进宏的选择器**不带 hwnd 也能跨重启**，同时保持快。
+
+宏不会自己启动程序：回放前目标窗口要在（`launch` 还没做）。
 
 ## 写一个技能
 

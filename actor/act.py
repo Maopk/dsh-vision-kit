@@ -120,9 +120,22 @@ def build(argv):
 
 
 def fmt(rep, pretty=True):
-    if not pretty or not isinstance(rep, dict) or not isinstance(rep.get('trace'), list):
+    if not pretty or not isinstance(rep, dict):
         return json.dumps(rep, ensure_ascii=False)
-    out = ['ok=%s steps=%s total=%sms' % (rep.get('ok'), rep.get('steps'), rep.get('total_ms'))]
+    if isinstance(rep.get('macros'), list):          # macro list: one line per macro
+        out = ['macros: %d in %s' % (len(rep['macros']), rep.get('dir'))]
+        for m in rep['macros']:
+            last = 'never' if m.get('last_ms') is None else '%sms %s' % (
+                m['last_ms'], 'ok' if m.get('last_ok') else 'FAILED')
+            out.append('  %-24s %2s steps  replays=%-3s %-14s %s' % (
+                m.get('name'), m.get('steps'), m.get('replays'), last, m.get('note') or ''))
+        return '\n'.join(out)
+    if not isinstance(rep.get('trace'), list):
+        return json.dumps(rep, ensure_ascii=False)
+    head = 'ok=%s steps=%s total=%sms' % (rep.get('ok'), rep.get('steps'), rep.get('total_ms'))
+    if rep.get('macro'):                             # a replay says which macro it was
+        head = 'macro=%s replay#%s %s' % (rep['macro'], rep.get('replays'), head)
+    out = [head]
     for t in rep['trace']:
         extra = ''
         for k in ('n', 'at', 'how', 'ratio', 'path', 'did', 'element', 'error'):

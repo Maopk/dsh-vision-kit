@@ -289,6 +289,56 @@ eq('a short list is left alone', actor_srv._slim([1, 2], 999), [1, 2])
 eq('frame and png never ride along', actor_srv._slim({'png': 'AAAA', 'hit': 1}, 999), {'hit': 1})
 
 
+# ── variables in a run, and the macro that freezes it ───────────────────────────────
+
+group('actor - {{variables}} and macros (record once, replay in one call)')
+_home_was = actor_srv.HOME
+actor_srv.HOME = tempfile.mkdtemp(prefix='dsh-vision-macro-')     # macros land in the scratch dir
+
+eq('a placeholder alone becomes the value itself',
+   actor_srv.interp({'x': '{{a.b}}'}, {'a': {'b': [7, 8]}}), {'x': [7, 8]})
+eq('a placeholder inside a string is inlined as JSON',
+   actor_srv.interp({'x': 'at {{p}} now'}, {'p': [1, 2]}), {'x': 'at [1, 2] now'})
+eq('no braces means no work', actor_srv.interp({'x': 'plain'}, {}), {'x': 'plain'})
+eq('lists are walked too', actor_srv.interp(['{{n}}'], {'n': 3}), [3])
+
+_cap = actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': 1, 'as': 's'},
+                                  {'op': 'sleep', 'ms': '{{s.slept_ms}}'}]})
+eq('as captures a step reply, {{}} feeds it to the next step', _cap['ok'], True)
+eq('  and both steps ran', _cap['steps'], 2)
+_lit = actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': 1, 'literal': True, 'note': '{{nope}}'}]})
+eq('a literal step keeps its braces', _lit['ok'], True)
+_bad = actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': '{{nope.x}}'}]})
+eq('an unresolvable variable fails that step', _bad['ok'], False)
+contains('  and the error names it', _bad['trace'][0]['error'], '{{nope.x}}')
+ok('the failing run still happened (run history)', _bad['run_id'] >= 1, _bad['run_id'])
+
+_saved = actor_srv.o_macro({'what': 'save', 'name': 'unit-macro', 'note': 'unit',
+                            'steps': [{'op': 'sleep', 'ms': 1}], 'args': {'n': 2}, 'vars': 'ignored'})
+eq('a macro saves its steps', _saved['saved'], True)
+eq('  and appears in the index', [m['name'] for m in actor_srv.macro_index()], ['unit-macro'])
+eq('  with its declared args', actor_srv.macro_index()[0]['args'], ['n'])
+_replay = actor_srv.o_macro({'what': 'run', 'name': 'unit-macro', 'args': {'n': 5}, 'results': True})
+eq('a replay runs the whole macro', _replay['steps'], 1)
+eq('  and the call args win over the recorded defaults', _replay['args'], {'n': 5})
+eq('  and the replay is counted', _replay['replays'], 1)
+eq('  and the stats went back to disk', actor_srv.macro_read('unit-macro')['stats']['replays'], 1)
+_dry = actor_srv.o_macro({'what': 'run', 'name': 'unit-macro', 'dry': True})
+eq('dry expands without executing', (_dry['dry'], _dry['steps'][0]['op']), (True, 'sleep'))
+_rerec = actor_srv.o_macro({'what': 'save', 'name': 'unit-macro'})
+eq('recording over a live macro is refused', _rerec['saved'], False)
+contains('  and says how to replace it anyway', _rerec['why'], 'overwrite')
+eq('a macro deletes', actor_srv.o_macro({'what': 'del', 'name': 'unit-macro'})['deleted'], 'unit-macro')
+eq('  and the index is empty again', actor_srv.macro_index(), [])
+_escape = False
+try:
+    actor_srv.macro_path('../escape')
+except ValueError:
+    _escape = True
+ok('a macro name cannot climb out of the macros dir', _escape)
+actor_srv.HOME = _home_was
+
+
 # ── import smoke ────────────────────────────────────────────────────────────────────
 
 group('import smoke - the headless modules still load')
