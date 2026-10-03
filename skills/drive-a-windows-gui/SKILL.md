@@ -41,8 +41,13 @@ description: Use when a task needs a Windows GUI driven by mouse and keyboard (o
 ## 4 一次 `run` 串完，别一步一停
 
 - 一个 `run` = 一次往返：把「点 → 等 → 验」写进同一个步骤数组。
+- 要读数据的步骤（`uia` / `state` / `probe` / `find`）在请求里加 **`"results": true`**：每步自己
+  那份返回会跟着 trace 回来（长文本截断、长列表保留 6 项 + `…(N more items)`）。**不加就只有标量**，
+  于是你被迫把那个 op 再发一次——这正是"一次假设一次往返"的老毛病（实测一次 280 秒的任务里，
+  32 次工具调用有 10 次是「截图→读图」）。
 - 从 PowerShell 直接把 JSON 递给客户端会被内层双引号吃掉（README 坑 10）→
-  **把请求写进文件，再 `act.cmd run <文件>`**。
+  **把请求写进文件，再 `act.cmd run <文件>`**（`act.cmd <文件>` 也行）。
+- 等待用 `wait_for`/`watch`，不要 `sleep` 猜时间（实测：手写的 sleep 占总时长 33%，真动作只占 7%）。
 
 ## 5 失败要响
 

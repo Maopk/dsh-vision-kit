@@ -65,8 +65,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   so the summary cannot drift away from the decorators. It runs as stage 6 of `tools/ci-static.ps1`,
   so CI picked it up without a workflow edit.
 
+- `run` can bring each step's own reply back: `{"op":"run","results":true,"steps":[…]}` folds the
+  op's reply into that step's trace entry as `data` — strings clipped at 400 characters by default,
+  a longer list keeps six items and says how many it dropped, and `frame` / `png` never ride along.
+  Passing a number instead of `true` sets the per-string budget. Without it the trace is exactly what
+  it was. This closes the gap that made every reader op (`uia`, `state`, `probe`, `find`) cost a
+  second call: in the measured 280 s GUI task, 10 of 32 tool calls were precisely that.
+
 ### Fixed
 
+- `act.py` accepts the spelling the README always used: a bare existing `<file>.json` as the first
+  argument is read as the request, exactly like `run <file>`. Until now `act.cmd skills\x.json` sent
+  `{"op": "D:\\…\\x.json"}` to the actor and came back `unknown op '…'` — one wasted round trip,
+  and it hit anyone who followed the manual literally.
 - `actor/actor.py`'s module docstring said the op set was `ping … log stop` (17 names) and left out
   `window`, `state` and `probe`; the decorators register 20. The line now matches the registry, and
   `tools/check-skill-ops.py` keeps it that way — that check is how the drift was found.

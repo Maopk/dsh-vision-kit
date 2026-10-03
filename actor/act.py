@@ -5,6 +5,7 @@
   python act.py ping
   python act.py shot path=C:/tmp/x.png
   python act.py run skills/whatever.json
+  python act.py skills/whatever.json
   python act.py '{"op":"click","target":{"xy":[100,200]}}'
   echo '{"op":"uia","what":"tree","depth":3}' | python act.py
 """
@@ -101,6 +102,9 @@ def build(argv):
     if a in ('run', 'json') and len(argv) > 1 and os.path.exists(argv[1]):
         with open(argv[1], encoding='utf-8') as f:
             return json.load(f)
+    if os.path.exists(a) and a.lower().endswith('.json'):
+        with open(a, encoding='utf-8') as f:      # the other spelling in the README: act.cmd <file>
+            return json.load(f)
     req = {'op': a}
     for kv in argv[1:]:
         if '=' not in kv:
@@ -127,7 +131,10 @@ def fmt(rep, pretty=True):
                 if k == 'element' and isinstance(v, dict):
                     v = '%s|%s' % (v.get('type'), v.get('name'))
                 extra += ' %s=%s' % (k, v)
-        out.append('  %2d %-9s %7sms ok=%s%s' % (t.get('i'), t.get('op'), t.get('ms'), t.get('ok'), extra))
+        line = '  %2d %-9s %7sms ok=%s%s' % (t.get('i'), t.get('op'), t.get('ms'), t.get('ok'), extra)
+        out.append(line)
+        if 'data' in t:                    # run with results=true: the step's own reply, pre-clipped
+            out.append('       data=%s' % json.dumps(t['data'], ensure_ascii=False))
     return '\n'.join(out)
 
 

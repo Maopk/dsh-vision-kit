@@ -1349,11 +1349,34 @@ def o_bench(req):
     return {'ok': True, **out}
 
 
+DATA_SKIP = ('frame', 'png')      # a frame id and a file blob are never worth a trace line
+
+
+def _slim(v, budget):
+    """Keep a step's own reply readable inside a trace: long text is cut, long lists keep a head."""
+    if isinstance(v, str):
+        return v if len(v) <= budget else '%s…(%d more chars)' % (v[:budget], len(v) - budget)
+    if isinstance(v, list):
+        head = [_slim(x, budget) for x in v[:6]]
+        return head + ['…(%d more items)' % (len(v) - 6)] if len(v) > 6 else head
+    if isinstance(v, dict):
+        return {k: _slim(x, budget) for k, x in v.items() if k not in DATA_SKIP}
+    return v
+
+
 @op('run')
 def o_run(req):
-    """One call = one skill. steps: list of ops; stops on the first error unless continue_on_error."""
+    """One call = one skill. steps: list of ops; stops on the first error unless continue_on_error.
+
+    `results: true` (or a number = characters per string) folds each step's own reply into its
+    trace entry as `data`, so a run that reads structure does not need a second call per reader.
+    Without it the trace stays as it was: index, op, ms, ok and a few scalar extras.
+    """
     trace = []
     t0 = time.perf_counter()
+    results = req.get('results')
+    budget = 400 if results is True else (
+        int(results) if isinstance(results, (int, float)) and results > 0 else 0)
     for i, st in enumerate(req.get('steps', [])):
         name = st.get('op')
         t1 = time.perf_counter()
@@ -1374,6 +1397,10 @@ def o_run(req):
                 entry['op_ms'] = res['ms']
         if not entry['ok']:
             entry['error'] = res.get('error')
+        if budget:
+            data = {k: v for k, v in res.items() if k not in DATA_SKIP}
+            if data:
+                entry['data'] = _slim(data, budget)
         trace.append(entry)
         if not entry['ok'] and not req.get('continue_on_error'):
             break

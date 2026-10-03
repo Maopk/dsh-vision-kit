@@ -99,7 +99,8 @@ eq('later k=v pairs are coerced with json.loads',
    {'op': 'ping', 'n': 3, 's': 'abc', 'b': True, 'f': 1.5})
 eq('tokens without = collect into args', act.build(['ping', 'pong', 'paf']),
    {'op': 'ping', 'args': ['pong', 'paf']})
-eq('a bare path is not read: it is the op', act.build(['C:/nope.json']), {'op': 'C:/nope.json'})
+eq('a bare path that is not a file is still the op', act.build(['C:/nope.json']),
+   {'op': 'C:/nope.json'})
 
 _req = os.path.join(tempfile.gettempdir(), 'dsh-vision-unit-req.json')
 with open(_req, 'w', encoding='utf-8') as fh:
@@ -107,6 +108,8 @@ with open(_req, 'w', encoding='utf-8') as fh:
 eq('run <file> reads the request from that file', act.build(['run', _req]),
    {'op': 'shot', 'path': 'x.png'})
 eq('json <file> does the same', act.build(['json', _req]), {'op': 'shot', 'path': 'x.png'})
+eq('and so does a bare <file>.json, the spelling the README uses', act.build([_req]),
+   {'op': 'shot', 'path': 'x.png'})
 
 
 # ── the actor's one-shot CLI: fmt() ─────────────────────────────────────────────────
@@ -265,6 +268,25 @@ _im.save(_png)
 _box = pv.load(_png, (10, 5, 10, 10))                # (x, y, w, h)
 eq('load crops the requested box', _box.shape, (10, 10, 3))
 eq('  and keeps the pixel values', (int(_box.min()), int(_box.max())), (255, 255))
+
+
+# ── the actor's run trace: what each step carries back ──────────────────────────────
+
+group('actor.o_run - one step can bring its own reply back')
+actor_srv = load_module('actor_under_test', 'actor/actor.py')
+_plain = actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': 1}]})['trace'][0]
+eq('by default the trace is unchanged', 'data' in _plain, False)
+eq('  and every step reported ok', _plain['ok'], True)
+_loud = actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': 1}], 'results': True})['trace'][0]
+eq('results=true folds the step reply in', _loud['data']['slept_ms'], 1)
+eq('a number sets the per-string budget',
+   actor_srv.o_run({'steps': [{'op': 'sleep', 'ms': 1}], 'results': 5})['trace'][0]['data']['slept_ms'], 1)
+eq('short text is untouched', actor_srv._slim({'t': 'abc'}, 10), {'t': 'abc'})
+contains('long text is cut with a count', actor_srv._slim({'t': 'x' * 100}, 10)['t'], '(90 more chars)')
+eq('a long list keeps six items and a count',
+   actor_srv._slim(list(range(10)), 999), [0, 1, 2, 3, 4, 5, '…(4 more items)'])
+eq('a short list is left alone', actor_srv._slim([1, 2], 999), [1, 2])
+eq('frame and png never ride along', actor_srv._slim({'png': 'AAAA', 'hit': 1}, 999), {'hit': 1})
 
 
 # ── import smoke ────────────────────────────────────────────────────────────────────

@@ -73,10 +73,11 @@ python actor\skills\demo_calc.py
 | `window` | 窗口管理：`front`（抢前台并激活）、`top`/`untop`（置顶钉住，做动作期间不让别的程序抢走焦点）、`info`、`max`/`min`/`restore`/`move`/`close`；`hwnd=` 或 `title_contains=` |
 | `wait_for` | 轮询条件（元素出现、颜色出现、模板出现），带超时 |
 | `watch` | 后台按 fps 抓帧做差分（等画面变化，不用轮询） |
-| `run` | **一次调用跑完一整段技能**：`{"op":"run","steps":[{...},{...}]}`，逐步返回 `ms/ok` |
+| `run` | **一次调用跑完一整段技能**：`{"op":"run","steps":[{...},{...}]}`，逐步返回 `ms/ok`；加 `"results": true` 则每步自己那份返回也塞进该步的 `data`（长文本截断、长列表保留 6 项 + `…(N more items)`，`frame`/`png` 不带） |
 | `bench` `log` `stop` | 基准、日志、退出 |
 
-`run` 是省往返的关键：一个技能 = 一次调用，返回逐步 trace。
+`run` 是省往返的关键：一个技能 = 一次调用，返回逐步 trace。读数据的 op（`uia`/`state`/`probe`/`find`）默认**只回报标量**，要它们的结果就传 `results`——否则得把那个 op 单独再发一次（这就是"一次假设一次往返"的旧毛病）。
+客户端两种写法都认：`act.cmd run <文件>` 与 `act.cmd <文件>`（后者是 README 里一直写着、代码以前不认的那个）。
 
 任何输入 op（`click`/`move`/`type`/`key`/`drag`）都能带 `front=<hwnd>` 或 `front_title=<子串>`：先抢前台（默认顺手置顶钉住）再动作，并把 `front` 的结果带回来。`click` 默认**不再做 100 ms 人手缓动**（要旧行为传 `ease:true`）；`type` 传 `per_char_ms:0` 就是**整串一次性 SendInput**（遇到丢字的 app 用 `chunk:40` 分批）；`uia` 的 `what:"tree"` 加 `compact:true` 直接给平表而不是整棵树。
 
