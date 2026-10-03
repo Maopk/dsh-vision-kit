@@ -46,6 +46,23 @@ UIA 必须单 STA 线程独占 COM 且每次调用带超时、UWP 要用 `shell:
 `SendInput` 只发给有焦点的窗口 → 先抢前台并钉住、等待要轮询结构通道而不是 sleep）：
 [actor/README.md](actor/README.md)。
 
+## 技能：模型被告知的方法
+
+`actor/` 给模型一双手，`skills/` 给它方法。一个技能 = 一个目录 + 一份 `SKILL.md`（头部
+`name` / `description`，下面是 Markdown 正文）—— 这正是 DSH 会从
+`$DSH_HOME\skills\<名字>\SKILL.md` 加载的格式。仓库是这份内容的唯一真相源，技能目录只是它的镜像：
+
+```powershell
+.\tools\install-skills.ps1 -Check      # N 一致 · M 需同步 · K 多余；不同步则 exit 1
+.\tools\install-skills.ps1             # 默认做符号链接（跟着仓库改），不允许链接时退回复制
+.\tools\check-skill-ops.py -v          # 技能里出现的每个 op 必须在 actor/actor.py 里存在
+```
+
+第一份是 `drive-a-windows-gui`，刻意写成能搬走的：正文只有方法（先判断要不要碰像素；结构优先于截图；
+用 `wait_for` 而不是 `sleep`；每个动作后验一个信号；一段流程一次 `run` 跑完；失败要响；不可逆操作交回
+用户）和每条规则背后的实测数字；一次性事实放附录，旁边写上"怎么重新发现它"的命令。
+`check-skill-ops.py` 是 `tools/ci-static.ps1` 的第 6 阶段，所以技能不可能写出这个 actor 没有的 op。
+
 ## 第一代：让 AI 看见屏幕
 
 ### 为什么需要它
@@ -61,6 +78,7 @@ DSH 的原生自看（self-look）插件是把页面 **DOM 序列化**成 PNG：
 
 ```
 actor/                        PC Actor —— 见 actor/README.md（现在的主路径）
+skills/                       模型被告知的方法：<名字>/SKILL.md，镜像进 DSH_HOME
 plugins/dsh-selflook-local/   DSH 插件：原生截屏 + shot RPC（上游 self-look 的加强分支）
                               ⚠ 默认没有安装；截图这条路已被 actor 的 shot op 取代
 tools/

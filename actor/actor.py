@@ -12,7 +12,8 @@ One long-lived process owns:
 The model sends a *skill*, not a single step; the loop lives in here.
 
 Protocol: TCP 127.0.0.1:<port>, one JSON request per line, one JSON reply per line.
-Ops: ping shot save find click move drag type key scroll uia wait_for run bench watch log stop
+Ops: ping shot save find click move drag type key scroll uia window wait_for watch state probe log bench run stop
+(kept in step with the @op(...) decorators by tools/check-skill-ops.py, which runs in CI)
 """
 import argparse, ctypes, json, os, queue, socketserver, sys, threading, time, traceback
 from ctypes import wintypes as wt

@@ -50,6 +50,26 @@ poll the structure channel instead of sleeping, don't hand JSON to `act.cmd` fro
 [actor/README.md](actor/README.md). The HOME that holds state is machine-local: `-Where` prints
 it, `-HomePath` / `ACTOR_HOME` move it, and nothing generated lands in the repo.
 
+## Skills: what the model is told
+
+`actor/` gives the model hands; `skills/` gives it the method. A skill is a directory holding one
+`SKILL.md` (`name` / `description` front matter, then Markdown) — the format DSH already loads from
+`$DSH_HOME\skills\<name>\SKILL.md`. This repo is the single source of truth for that content and the
+skills home is a mirror of it:
+
+```powershell
+.\tools\install-skills.ps1 -Check      # N 一致 · M 需同步 · K 多余; exit 1 when out of sync
+.\tools\install-skills.ps1             # link (so it follows repo edits) or copy when linking is refused
+.\tools\check-skill-ops.py -v          # every op a skill names must exist in actor/actor.py
+```
+
+`drive-a-windows-gui` is the first one, and it is deliberately portable: the body is method (decide
+whether pixels are needed at all; structure before screenshots; `wait_for`, not `sleep`; verify one
+signal after every action; one `run` per sequence; fail loudly; hand back to the user for anything
+irreversible) together with the measurements behind each rule, while machine-specific facts live in
+an appendix next to the command that rediscovers them. `check-skill-ops.py` is stage 6 of
+`tools/ci-static.ps1`, so a skill cannot name an op this actor does not have.
+
 ## Generation 1: seeing the screen
 
 ### Why
@@ -65,6 +85,7 @@ This plugin captures the **real screen** instead (Win32 `CopyFromScreen` under a
 
 ```
 actor/                        the PC Actor — see actor/README.md (current path)
+skills/                       what the model is told: <name>/SKILL.md, mirrored into DSH_HOME
 plugins/dsh-selflook-local/   DSH plugin: native capture + `shot` RPC (fork of upstream self-look)
                               ⚠ not installed by default; the actor's `shot` op supersedes it
 tools/

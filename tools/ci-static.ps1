@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Every offline static check for this repo, in one command.
 
@@ -146,6 +146,14 @@ try {
             Verdict 'node --check' ($jsBad.Count -eq 0) "$($jsFiles.Count) bundles, $($jsBad.Count) with a syntax error"
         }
     }
+
+    # ── 6. skills
+    $skillFiles = @(Get-ChildItem (Join-Path $repo 'skills') -Recurse -File -Filter 'SKILL.md' -ErrorAction SilentlyContinue)
+    Stage "skills ($($skillFiles.Count) file(s))"
+    $skillOut = & $py tools/check-skill-ops.py 2>&1
+    $skillCode = $LASTEXITCODE
+    $skillOut | ForEach-Object { Say "  $_" $(if ($skillCode -eq 0) { 'Gray' } else { 'Red' }) }
+    Verdict 'skills' ($skillCode -eq 0) $(if ($skillCode -eq 0) { 'op names match actor/actor.py' } else { "exit $skillCode" })
 
     Say ''
     if ($failed.Count -eq 0) {

@@ -42,8 +42,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `ocr_boxes.py`, `reset-ollama.ps1` — runs what can run headless, and records the rest in the run
   summary and an artifact instead of pretending to judge them.
 
+- `skills/` — the model-facing half of the kit now lives in the repo as well. A skill is
+  `<name>/SKILL.md` with `name` / `description` front matter, and DSH loads it from
+  `$DSH_HOME\skills\<name>\SKILL.md`; the repo is the single source of truth and the skills home is
+  a mirror of it. The first skill, `drive-a-windows-gui`, is the method this kit hands a model:
+  decide whether pixels are needed at all (structural channel → logs and saves → deep link →
+  pixels), read structure before screenshots, wait with `wait_for` rather than `sleep`, check one
+  signal after every action, run a whole sequence in one `run`, fail loudly, and hand back to the
+  user for anything irreversible. Its rules carry the measurement that justifies them (93 s of
+  hand-written sleeps against ~3 s of real mouse and keyboard work in one 280 s task), and the
+  machine-specific facts sit in an appendix next to the command that rediscovers them, so the body
+  stays portable to another box.
+- `tools/install-skills.ps1` — mirrors `skills/` into the skills home and reports drift instead of
+  guessing: `-Check` prints `N 一致 · M 需同步 · K 多余` and exits 1 when out of sync; a plain run
+  links (symbolic link, so the installed skill follows later repo edits) and falls back to a copy,
+  saying so, when linking is not permitted; `-Mode Copy|Link` forces either; `-SkillsHome` points it
+  somewhere else. Nothing outside the named skills is ever touched, and nothing is ever deleted.
+- `tools/check-skill-ops.py` — takes the op registry straight from `actor/actor.py`'s `@op('name')`
+  decorators and fails when a skill names an op that does not exist. Names are read only from real
+  requests (`"op": "click"` in an example, `act.cmd run <file>` in a command line), never from the
+  prose that explains an op, and the module docstring's `Ops:` line is checked against the same set
+  so the summary cannot drift away from the decorators. It runs as stage 6 of `tools/ci-static.ps1`,
+  so CI picked it up without a workflow edit.
+
 ### Fixed
 
+- `actor/actor.py`'s module docstring said the op set was `ping … log stop` (17 names) and left out
+  `window`, `state` and `probe`; the decorators register 20. The line now matches the registry, and
+  `tools/check-skill-ops.py` keeps it that way — that check is how the drift was found.
 - `actor/act.cmd` and `actor/actor.ps1` no longer hard-code one machine's interpreter path
   (CONTRIBUTING, ground rule 2: no absolute paths in committed scripts). Both now try
   `-Python` / `%ACTOR_PY%` → DSH's bundled runtime → `python` on PATH → the `py` launcher, and
