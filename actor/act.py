@@ -135,6 +135,8 @@ def fmt(rep, pretty=True):
     head = 'ok=%s steps=%s total=%sms' % (rep.get('ok'), rep.get('steps'), rep.get('total_ms'))
     if rep.get('macro'):                             # a replay says which macro it was
         head = 'macro=%s replay#%s %s' % (rep['macro'], rep.get('replays'), head)
+    if rep.get('front_resolve_ms'):                  # the window lookup that runs before step 0
+        head += ' front=%sms' % rep['front_resolve_ms']
     out = [head]
     for t in rep['trace']:
         extra = ''

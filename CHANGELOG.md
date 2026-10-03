@@ -84,7 +84,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `"literal": true` leaves a step untouched, `dry: true` expands without executing.
   Measured on Calculator, 7 steps (raise window → click the display → Esc → type → Enter → read the
   display back → unpin): record 1.8 s, replay **0.30 s** wall (0.20 s server + 0.10 s client start),
-  three replays returning 56 / 579 / 81 — one call each instead of seven.
+  three replays returning 56 / 579 / 81 — one call each instead of seven. Both `run` and `macro run`
+  also report `front_resolve_ms`: the front window is resolved *before* step 0, and with a cold cache
+  that lookup alone measured **1361 ms** (1–3 ms warm), so the first replay after the daemon or the
+  target app starts costs about a second more than the ones after it. `act.cmd` prints it as `front=`.
 
 ### Fixed
 

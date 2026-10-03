@@ -1578,7 +1578,9 @@ def exec_steps(steps, req, ctx=None):
     # The front window is also the best search scope for every UIA selector in this run:
     # resolved once here (then cached), so each step searches ONE window (~95 ms) instead
     # of the whole desktop (~1.5 s). A step that brings its own scope/hwnd keeps it.
+    t_scope = time.perf_counter()
     scope_hwnd = resolve_hwnd(req.get('front'), req.get('front_title')) if top_front else 0
+    scope_ms = round((time.perf_counter() - t_scope) * 1000, 1)
     for i, raw in enumerate(steps):
         name = raw.get('op')
         t1 = time.perf_counter()
@@ -1614,7 +1616,7 @@ def exec_steps(steps, req, ctx=None):
             ctx[str(raw['as'])] = res
         if not entry['ok'] and not req.get('continue_on_error'):
             break
-    return trace, ctx
+    return trace, ctx, scope_ms
 
 
 @op('run')
@@ -1629,13 +1631,14 @@ def o_run(req):
     global RUN_SEQ
     t0 = time.perf_counter()
     steps = list(req.get('steps') or [])
-    trace, _ctx = exec_steps(steps, req, _dict(req.get('args')))
+    trace, _ctx, scope_ms = exec_steps(steps, req, _dict(req.get('args')))
     ok = all(t['ok'] for t in trace)
     RUN_SEQ += 1
     ms = round((time.perf_counter() - t0) * 1000, 1)
     RUNS.append({'id': RUN_SEQ, 'at': time.strftime('%Y-%m-%dT%H:%M:%S'), 'ok': ok,
                  'ms': ms, 'steps': steps, 'front': _front_now()})
-    out = {'ok': ok, 'steps': len(trace), 'total_ms': ms, 'trace': trace, 'run_id': RUN_SEQ}
+    out = {'ok': ok, 'steps': len(trace), 'total_ms': ms, 'front_resolve_ms': scope_ms,
+           'trace': trace, 'run_id': RUN_SEQ}
     if req.get('record'):
         out['recorded'] = _record(req['record'], req, steps, ms=ms, run_id=RUN_SEQ,
                                   overwrite=bool(req.get('overwrite')),
@@ -1703,12 +1706,15 @@ def _run_macro(req):
     front = _dict(req.get('front')) or _dict(doc.get('front')) or None
     eff = dict(req)
     fronted = None
+    front_ms = 0.0
     if front:
         eff['front'] = front.get('hwnd')
         eff['front_title'] = front.get('title_contains')
+        t_front = time.perf_counter()
         fronted = _front(front.get('hwnd'), front.get('title_contains'), front.get('top', True))
+        front_ms = (time.perf_counter() - t_front) * 1000
     t0 = time.perf_counter()
-    trace, _ctx = exec_steps(steps, eff, dict(args))
+    trace, _ctx, scope_ms = exec_steps(steps, eff, dict(args))
     ok = all(t['ok'] for t in trace)
     ms = round((time.perf_counter() - t0) * 1000, 1)
     st = dict(doc.get('stats') or {})
@@ -1720,6 +1726,7 @@ def _run_macro(req):
     except Exception as e:                       # a replay must not fail over bookkeeping
         log('macro.stats_fail', name=doc.get('name'), err=str(e))
     out = {'ok': ok, 'macro': doc['name'], 'steps': len(trace), 'total_ms': ms, 'trace': trace,
+           'front_resolve_ms': round(front_ms + scope_ms, 1),
            'args': args, 'replays': st['replays'], 'front': fronted,
            'recorded_ms': (doc.get('from_run') or {}).get('ms')}
     failed = next((t['i'] for t in trace if not t['ok']), None)
