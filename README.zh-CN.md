@@ -150,11 +150,13 @@ tools/
                               ⚠ 已被 actor run 取代，保留作参考实现
   contact-send.ps1            一条命令：搜索联系人 → 选中 → 模板确认真身 → 发送 → 像素复核
   pixel-verdict.py            无 OCR 的像素判据（输入框墨迹 / 气泡蓝）
+  仓库自检工具：               ci-static.ps1 / check-skill-ops.py / check-counts.py / install-skills.ps1
 docs/
   视觉能力实测报告.md          中文：结论表 + 复现命令 + 踩坑
   vision-capability-report.md  英文版
   界面自动化日志.md            中文：挂件表演 / QQ 代发 / 识别提速（含全部实测数字）
   windows-ollama-setup.md      Windows 上给 DSH 跑视觉模型的注意事项
+  计数闸设计.md                中文：计数闸（C3）设计 —— 每个计数一个真源、三查
 examples/vision-router-tuned.yml   vision-router 配置块（含注释）
 tests/score-pipeline.ps1      拿真值框给两条零模型管线打分
 ```

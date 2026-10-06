@@ -53,12 +53,16 @@ python tests\make-synthetic-sample.py out\ci-sample.png
 pwsh -File tests\score-pipeline.ps1 -Image out\ci-sample.png -Expect 80,60,521,381 -Strict
 
 # 5. every offline static check behind one command: parse + ruff + mypy + PSScriptAnalyzer +
-#    node --check. Needs numpy/Pillow and the dev requirements; the analyzer is a PowerShell
-#    module, and the script prints the Install-Module line when it cannot find it.
+#    node --check + skills + counts. Needs numpy/Pillow and the dev requirements; the analyzer
+#    is a PowerShell module, and the script prints the Install-Module line when it cannot find it.
 pwsh -File tools\ci-static.ps1
 
 # 6. the headless unit tests: pure functions only, no pytest, no screen, no network
 python tests\unit-tests.py            # -v prints every assertion, not just the failures
+
+# 7. the counting gate: one source per count, the EN/ZH README numbers agree, and every name
+#    in the README Layout blocks exists on disk (ci-static.ps1 runs it as stage 7)
+python tools\check-counts.py          # -v lists every number token it compared
 ```
 
 A request that comes back as `Expecting property name enclosed in double quotes` means the shell
@@ -91,7 +95,8 @@ artifact instead of pretending to test it.
 
 | Script | Job | What runs |
 |---|---|---|
-| `tools/ci-static.ps1` | `static` | all five stages: parse, ruff, mypy, PSScriptAnalyzer, `node --check` |
+| `tools/ci-static.ps1` | `static` | all seven stages: parse, ruff, mypy, PSScriptAnalyzer, `node --check`, skills, counts |
+| `tools/check-counts.py` | `static` | the counting gate, also stage 7 above: pitfall count, EN/ZH numbers, Layout manifest |
 | `tests/unit-tests.py` | `unit` | 69 assertions over the pure functions plus the import smoke test |
 | `tests/make-synthetic-sample.py` | `detectors` | draws `out/ci-sample.png` with a known box |
 | `tests/score-pipeline.ps1` | `detectors` | scores that sample: `-Strict -Expect 80,60,521,381` |

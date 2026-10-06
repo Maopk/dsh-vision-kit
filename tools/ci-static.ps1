@@ -15,6 +15,8 @@
       3. mypy      (ONE FILE AT A TIME: separate entry scripts all look like __main__)
       4. PSScriptAnalyzer for every .ps1 (settings from PSScriptAnalyzerSettings.psd1)
       5. node --check for the plugin bundles
+      6. skills    (check-skill-ops.py: every op a skill names exists in actor/actor.py)
+      7. counts    (check-counts.py: one source per count, EN/ZH numbers, Layout manifest)
 
     Exits 0 only when every stage passed.  -Python overrides the interpreter; the default
     chain is the same one actor.ps1 and tests/score-pipeline.ps1 use.
@@ -154,6 +156,13 @@ try {
     $skillCode = $LASTEXITCODE
     $skillOut | ForEach-Object { Say "  $_" $(if ($skillCode -eq 0) { 'Gray' } else { 'Red' }) }
     Verdict 'skills' ($skillCode -eq 0) $(if ($skillCode -eq 0) { 'op names match actor/actor.py' } else { "exit $skillCode" })
+
+    # ── 7. counts
+    Stage 'counts'
+    $countOut = & $py tools/check-counts.py 2>&1
+    $countCode = $LASTEXITCODE
+    $countOut | ForEach-Object { Say "  $_" $(if ($countCode -eq 0) { 'Gray' } else { 'Red' }) }
+    Verdict 'counts' ($countCode -eq 0) $(if ($countCode -eq 0) { 'counts, bilingual numbers and the Layout manifest agree' } else { "exit $countCode" })
 
     Say ''
     if ($failed.Count -eq 0) {

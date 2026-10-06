@@ -166,11 +166,13 @@ tools/
                               ⚠ superseded by `actor run`; kept as the reference implementation
   contact-send.ps1            one command: search a contact, pick it, verify identity, send, re-check
   pixel-verdict.py            OCR-free pixel verdicts (composer ink / bubble blue)
+  repo self-check tooling:    ci-static.ps1 / check-skill-ops.py / check-counts.py / install-skills.ps1
 docs/
   vision-capability-report.md English report (table, reproduction, pitfalls)
   视觉能力实测报告.md          Chinese report
   界面自动化日志.md            Chinese work log: widget drag, QQ send, recognition speed-up
   windows-ollama-setup.md     Ollama-on-Windows notes for DSH vision
+  计数闸设计.md                the counting gate (C3) design: one source per count, three checks
 examples/vision-router-tuned.yml   the vision-router config block used here
 tests/score-pipeline.ps1      score both zero-model detectors against a ground-truth box
 ```

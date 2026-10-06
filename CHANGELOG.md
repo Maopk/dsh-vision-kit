@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `tools/check-counts.py` — **one source per documented count**, wired as stage 7 of
+  `tools/ci-static.ps1` and runnable on its own. Three checks, stdlib only, no screen: (1) a count
+  written down in more than one place must equal its source — the pitfall count claimed by
+  `README.md` / `README.zh-CN.md` / `skills/*/SKILL.md` against the numbered list in
+  `actor/README.md` (it had drifted twice: seven -> nine -> eleven), and the stage count claimed by
+  `CONTRIBUTING.md` against the `# ── N.` markers of `ci-static.ps1` plus the list in its own
+  docstring (that one was already wrong: five against six running stages); (2) every number the
+  English README carries must also appear in the Chinese one, and the same for the two capability
+  reports — the reverse direction needs an entry in the allowlist with a reason (today: the OCR'd
+  预算/余额 row); (3) every file named in a README Layout block exists on disk. The design note that
+  asked for it is `docs/计数闸设计.md`. Boundary: it compares numbers and names, not prose — a
+  wrong sentence next to the right numbers still passes.
+
 - `actor.py` — **a background input channel** (`bg:true`, plus `hwnd` / `title_contains` on the input
   ops) **and the Tk key names that used to be dropped silently**. `click` / `move` / `drag` / `type` /
   `key` / `scroll` can post to a window instead of driving the global cursor and keyboard: a primitive
@@ -136,6 +149,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   target app starts costs about a second more than the ones after it. `act.cmd` prints it as `front=`.
 
 ### Fixed
+
+- `CONTRIBUTING.md` said the static job runs "all five stages" and the `ci-static.ps1` docstring
+  listed five, while the script had been running six — the `skills` stage was in neither list.
+  Both now say seven, which is what the script does, and stage 7 keeps the number honest.
 
 - `act.py` accepts the spelling the README always used: a bare existing `<file>.json` as the first
   argument is read as the request, exactly like `run <file>`. Until now `act.cmd skills\x.json` sent
