@@ -7,6 +7,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `actor.py` — **a background input channel** (`bg:true`, plus `hwnd` / `title_contains` on the input
+  ops) **and the Tk key names that used to be dropped silently**. `click` / `move` / `drag` / `type` /
+  `key` / `scroll` can post to a window instead of driving the global cursor and keyboard: a primitive
+  layer (`post_click` / `post_drag` / `post_text` / `post_key` / `post_scroll`, `focus_hwnd`,
+  `grab_window`) maps global coordinates into the window's client area, `window` gained
+  `mode:"foreground"` / `"bottom"` / `"focus"`, and `shot` / `save` can crop a window's own pixels
+  (`hwnd=`) through `PrintWindow` while that window sits behind another one. `focus_hwnd` exists
+  because **Tk throws posted keys away unless it believes it has focus**, so the focus handover and
+  the post have to travel in the same request. The key table also learned `backspace` and the
+  `prior` / `pageup` / `next` / `pagedown` spellings. No new op (23), no new dependency, no absolute
+  path, and the state directory order is still `$ACTOR_HOME` > `home.txt` > the code dir.
+  Honest boundary: on the Tk practice target **posted mouse messages do not drive the app** — three
+  runs left it on task 0 while the driver reported its clicks and drags, so that half is recorded as
+  an inference, not a measurement (keys posted after a focus handover do work). `PrintWindow` asks for
+  `PW_RENDERFULLCONTENT` (flag 2) and falls back to flag 0 for windows that refuse it.
+  Measured (`836c867`, Calculator, 2026-10-06): `actor\tests\dirty_calc.py` leaves the app dirty in
+  26.1 ms, then `actor\skills\demo_calc.py` passes both sums — `7*8 -> 56`, `12+30 -> 42`, **0 pixels
+  read** — with window front 3.5 ms, TOPMOST pin 1.6 ms, click 42.1 ms, `esc` 52.1 ms, `type` 55.9 ms,
+  `enter` 55.8 ms, display poll 16.4 ms, the whole 36-button keypad in one structure call 47.4 ms,
+  `type` 81.8 ms, click-by-name 63.2 ms, untop 3.1 ms, and **1719.0 ms wall clock including the launch**.
+
 - `actor.py` op `capture` — record a demonstration **by hand** and get a macro back:
   `act.cmd capture start name=calc-demo front_title=计算器`, do it once yourself,
   `act.cmd capture stop`. Low-level mouse and keyboard hooks watch one window; every click is
