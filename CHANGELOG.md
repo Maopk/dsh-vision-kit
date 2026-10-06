@@ -203,6 +203,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Changed
 
+- The allowlist discipline in `docs/计数闸设计.md` (check 2, the bilingual-numbers check) now
+  covers **batch additions**: a PR that adds two or more entries must give a reason for each one
+  in its description. A single entry needs no extra process, and a well-argued batch is allowed —
+  the rule asks for the explanation, it does not forbid the batch.
+
 - `README.zh-CN.md` is back in step with the English README, which stays the authority. The latency
   table now carries the same numbers the English one does — windows **48 ms**, colour blobs
   **102 ms**, template match **83 ms**, click **33–46 ms** with the old easing path named at 120 ms,
