@@ -11,11 +11,26 @@
 
 - English: [README.md](README.md) · Actor 手册： [actor/README.md](actor/README.md) · 结论报告： [视觉能力实测报告](docs/视觉能力实测报告.md) · [English report](docs/vision-capability-report.md)
 
+## 为什么有这个仓库
+
+GUI 自动化慢在一个很具体的地方：不是识别，而是**那个循环**。一次假设换一次工具往返，而每次往返
+都要新起一个 shell、冷启动一次 Python——一条七步的流程就变成几分钟的等待，模型的上下文还得花在
+进程管理上，而不是屏幕上。
+
+这里的答案是**常驻 actor**：一个进程握住屏幕、输入队列和自动化会话，于是一整段技能就是**一次
+调用**——而且每一步都带回自己的耗时，所以"快"是量出来的，不是猜的。
+
+**谁需要它**：任何要自动化"没有 API 的 Windows 桌面"的人——GUI 测试、要反复做的录入或发消息
+流程、需要真的去**动手**而不是只描述的 agent。**前提**：一台有交互式桌面的 Windows（actor 驱动的
+是真实的前台窗口，不是无头会话）。
+
+**从哪开始**：[`actor/`](actor/README.md) —— 一行 JSON 进、一行 JSON 出。下面的第一代与一代半
+作为**参考**保留（OCR / 几何 / VLM 打分仍然只有它们能走），用 actor 不需要它们里的任何东西。
+
 ## 现在的主路径：PC Actor
 
 `actor/` 是一个长驻进程，把屏幕、输入队列和自动化会话都握在手里，在 `127.0.0.1:8731` 上
-一行 JSON 进、一行 JSON 出。它存在的理由：GUI 自动化里慢的从来不是识别，而是**那个循环**
-——一次假设一次工具往返，而每次往返都要新起 shell 和冷启动 Python。
+一行 JSON 进、一行 JSON 出。
 
 ```powershell
 # 不需要先装什么：客户端会自动把守护进程拉起来
@@ -41,10 +56,12 @@
 | 协议往返 / 客户端启动 | — | **12 ms / 107 ms** |
 | 完整技能：启动计算器 → `7*8` → 读 56 → `12+30` → 点「等于」→ 读 42 | 几分钟、几十次调用 | **0.62 s**（热）/ **1.4 s**（含 UWP 冷启动），**读像素 0 次** |
 
-细节、op 表、状态目录（`D:\DSH\dsh-actor`）与七条踩坑（`TreeScope_Descendants = 4`、
+细节、op 表、状态目录与十一条踩坑（`TreeScope_Descendants = 4`、
 UIA 必须单 STA 线程独占 COM 且每次调用带超时、UWP 要用 `shell:appsFolder` 启动、
-`SendInput` 只发给有焦点的窗口 → 先抢前台并钉住、等待要轮询结构通道而不是 sleep）：
-[actor/README.md](actor/README.md)。
+`SendInput` 只发给有焦点的窗口 → 先抢前台并钉住、等待要轮询结构通道而不是 sleep、
+别从 PowerShell 里把 JSON 递给 `act.cmd` —— 完整清单见 `actor/README.md`）：
+[actor/README.md](actor/README.md)。状态目录（HOME）是**机器本地**的：`-Where` 打印它的真实
+位置，`-HomePath` / `ACTOR_HOME` 可以把它搬走，生成物一律不落进仓库。
 
 ## 技能：模型被告知的方法
 
@@ -63,7 +80,20 @@ UIA 必须单 STA 线程独占 COM 且每次调用带超时、UWP 要用 `shell:
 用户）和每条规则背后的实测数字；一次性事实放附录，旁边写上"怎么重新发现它"的命令。
 `check-skill-ops.py` 是 `tools/ci-static.ps1` 的第 6 阶段，所以技能不可能写出这个 actor 没有的 op。
 
-## 第一代：让 AI 看见屏幕
+**怎么加一个** —— 技能是一个目录，不需要注册。建 `skills/<名字>/SKILL.md`，头部写
+`name` / `description`，正文先写方法（规则在前、支撑它的数字在后；机器特有的事实放附录，旁边写上
+"怎么重新发现它"的命令），然后：
+
+```powershell
+.\tools\install-skills.ps1 -Check      # 镜像不同步时 exit 1
+.\tools\install-skills.ps1             # 链接（或复制）进 $DSH_HOME\skills
+.\tools\check-skill-ops.py -v          # 你写的每个 op 都必须在 actor/actor.py 里存在
+```
+
+除此之外不用手工接线：这个镜像**就是**安装，而 `tools/ci-static.ps1` 的第 6 阶段会在技能写出
+actor 没有的 op 时直接判失败。要引用的 op 表在 [actor/README.md](actor/README.md)。
+
+## 第一代：让 AI 看见屏幕（参考）
 
 ### 为什么需要它
 

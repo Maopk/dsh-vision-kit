@@ -186,6 +186,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Changed
 
+- The front door now answers its three questions before the reader scrolls. **Why**: a new
+  `## Why this exists` / `## 为什么有这个仓库` section states the actual problem (the loop, not
+  recognition), who needs it and the prerequisite (an interactive Windows desktop, not a headless
+  session). **Where to start**: an explicit `Start here: actor/` line, and Generation 1 is now
+  titled `## Generation 1: seeing the screen (reference)` — the older generations read as
+  reference, not as alternatives. **How to add one**: the Skills section gained a recipe — create
+  `skills/<name>/SKILL.md`, run `install-skills.ps1`, then `check-skill-ops.py`; the mirror *is*
+  the install, and stage 6 of `tools/ci-static.ps1` already fails a skill that names an op the
+  actor does not have.
+- `README.zh-CN.md` was the last place still disagreeing with the English text: it presented this
+  machine's HOME (`D:\DSH\dsh-actor`) as the project's, and said **seven** pitfalls where
+  `actor/README.md` lists **eleven**. Both fixed; the HOME now reads the way the English text
+  reads it (`-Where` prints it, `-HomePath` / `ACTOR_HOME` move it, nothing generated lands in the
+  repo). Honest boundary: the Chinese performance table still carries three numbers from an older
+  measurement (**41 / 110 / 91 ms** against the English **48 / 102 / 83 ms**, and the click row as
+  the pre-change easing path **~120 ms** instead of **33–46 ms**), and the macro / `capture`
+  narrative plus the last three replay rows of that table have no Chinese text yet — that is a
+  translation pass, listed rather than silently rewritten.
+- `docs/视觉能力实测报告.md` is aligned with `docs/vision-capability-report.md`: both now carry
+  pitfall 4 (**a VLM's box is not a measurement**) and the "what each question should use" table,
+  and their section headings match one to one. No number changed — the two results tables were
+  already identical, which is exactly what made the missing prose stand out.
+
 - Two lookups that used to cost ~1.2–1.5 s *per step* are now ~0, which is what makes a replay fast
   rather than merely automatic. A window resolved from `title_contains` is remembered and re-validated
   with two Win32 calls instead of a UIA walk of the whole desktop (**1371 ms → 3 ms**; dropped when the

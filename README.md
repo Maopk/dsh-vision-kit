@@ -11,12 +11,30 @@ A Windows/desktop toolkit that lets a **DeepSeek Harness** agent see the screen 
 
 - 中文: [README.zh-CN.md](README.zh-CN.md) · Actor manual: [actor/README.md](actor/README.md) · Reports: [English](docs/vision-capability-report.md) · [中文](docs/视觉能力实测报告.md)
 
+## Why this exists
+
+GUI automation is slow in one specific place: not recognition — **the loop**. One hypothesis per
+tool round trip, and every round trip pays for a fresh shell and a cold Python; a seven-step flow
+turns into minutes of waiting, and the agent spends its context on process management instead of
+on the screen.
+
+The answer here is a **resident actor**: one process holds the screen, the input queue and the
+automation session, so a whole skill is **one call** — and every step comes back with its own
+timing, which makes a claim about speed a measurement instead of a hope.
+
+**Who needs it:** anyone automating a Windows desktop that has no API — a GUI test suite, a
+repeatable data-entry or messaging flow, an agent that has to *do* something instead of describing
+it. **Prerequisite:** an interactive Windows desktop (the actor drives the real, focused window,
+not a headless session).
+
+**Start here:** [`actor/`](actor/README.md) — one JSON line in, one JSON line out. Generations 1
+and 1.5 below are kept as **reference** (they remain the only OCR / geometry / VLM-scoring path);
+nothing in them is required in order to use the actor.
+
 ## The current path: the PC Actor
 
 `actor/` is a long-lived process that holds the screen, the input queue and the automation
-session, and answers one JSON line per request on `127.0.0.1:8731`. It exists because the
-slow part of GUI automation was never recognition — it was **the loop**: one hypothesis per
-round trip, each round trip paying for a fresh shell and a cold Python.
+session, and answers one JSON line per request on `127.0.0.1:8731`.
 
 ```powershell
 # nothing to install first: the client boots the daemon on demand
@@ -100,7 +118,22 @@ irreversible) together with the measurements behind each rule, while machine-spe
 an appendix next to the command that rediscovers them. `check-skill-ops.py` is stage 6 of
 `tools/ci-static.ps1`, so a skill cannot name an op this actor does not have.
 
-## Generation 1: seeing the screen
+**Adding one** — a skill is a directory, not a registration. Create `skills/<name>/SKILL.md` with
+`name` / `description` front matter and the method in the body: the rules first, the numbers that
+justify them second, machine-specific facts in an appendix next to the command that rediscovers
+them. Then:
+
+```powershell
+.\tools\install-skills.ps1 -Check      # exit 1 while the mirror is out of sync
+.\tools\install-skills.ps1             # link (or copy) it into $DSH_HOME\skills
+.\tools\check-skill-ops.py -v          # every op you named must exist in actor/actor.py
+```
+
+Nothing else is wired by hand: the mirror *is* the install, and stage 6 of `tools/ci-static.ps1`
+already fails the build if a skill names an op the actor does not have. The op table you will be
+quoting lives in [actor/README.md](actor/README.md).
+
+## Generation 1: seeing the screen (reference)
 
 ### Why
 
