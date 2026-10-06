@@ -191,8 +191,11 @@ MOVE, LDOWN, LUP, RDOWN, RUP, MDOWN, MUP, WHEEL = 0x0001, 0x0002, 0x0004, 0x0008
 ABSOLUTE, VIRTUALDESK = 0x8000, 0x4000
 KEYUP, UNICODE, SCANCODE = 0x0002, 0x0004, 0x0008
 
-VK = {'back': 0x08, 'tab': 0x09, 'enter': 0x0D, 'return': 0x0D, 'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12,
+VK = {'back': 0x08, 'backspace': 0x08, 'tab': 0x09, 'enter': 0x0D, 'return': 0x0D, 'shift': 0x10, 'ctrl': 0x11, 'alt': 0x12,
       'pause': 0x13, 'caps': 0x14, 'esc': 0x1B, 'escape': 0x1B, 'space': 0x20, 'pgup': 0x21, 'pgdn': 0x22,
+      # Tk spells PageUp/PageDown "Prior"/"Next" in keysyms, and a GUI written in Tk
+      # binds those names, so accept them here too rather than losing the key silently
+      'prior': 0x21, 'pageup': 0x21, 'next': 0x22, 'pagedown': 0x22,
       'end': 0x23, 'home': 0x24, 'left': 0x25, 'up': 0x26, 'right': 0x27, 'down': 0x28, 'print': 0x2C,
       'insert': 0x2D, 'delete': 0x2E, 'del': 0x2E, 'win': 0x5B, 'lwin': 0x5B, 'apps': 0x5D,
       'num0': 0x60, 'num1': 0x61, 'num2': 0x62, 'num3': 0x63, 'num4': 0x64, 'num5': 0x65, 'num6': 0x66,
@@ -842,17 +845,41 @@ class Actor:
             self.frame_id += 1
         return self.frame
 
-    def shot(self, path=None, region=None):
-        f = self.ensure(0)
-        res = {'size': [f.shape[1], f.shape[0]], 'geom': list(self.screen.geom), 'frame_id': self.frame_id}
-        if region:
-            x1, y1, x2, y2 = [int(v) for v in region]
-            f = f[y1:y2, x1:x2]
-            res['crop'] = [x1, y1, x2 - x1, y2 - y1]
+    def shot(self, path=None, region=None, hwnd=None):
+        """Grab the screen, or one window's own pixels when `hwnd` is given.
+
+        A window grab goes through PrintWindow, so it works while the window is
+        covered or in the background and never brings it forward. `region` stays
+        screen-relative in both modes, so callers do not have to convert anything.
+        """
+        if hwnd:
+            arr = grab_window(hwnd)
+            ox, oy = win_rect(hwnd)[:2]
+            cx0, cy0, cx1, cy1 = client_rect(hwnd)
+            # hand back the client surface, not the frame: a title bar would sit right
+            # above the app's own banner and be just as dark
+            arr = arr[max(0, cy0 - oy):max(0, cy1 - oy), max(0, cx0 - ox):max(0, cx1 - ox)]
+            ox, oy = cx0, cy0
+            res = {'size': [arr.shape[1], arr.shape[0]], 'frame_id': self.frame_id,
+                   'hwnd': int(hwnd), 'origin': [ox, oy], 'bg': True,
+                   'client': [cx0, cy0, cx1, cy1]}
+            if region:
+                x1, y1, x2, y2 = [int(v) for v in region]
+                arr = arr[max(0, y1 - oy):max(0, y2 - oy), max(0, x1 - ox):max(0, x2 - ox)]
+                res['crop'] = [x1, y1, x2 - x1, y2 - y1]
+        else:
+            f = self.ensure(0)
+            arr = f
+            res = {'size': [f.shape[1], f.shape[0]], 'geom': list(self.screen.geom),
+                   'frame_id': self.frame_id}
+            if region:
+                x1, y1, x2, y2 = [int(v) for v in region]
+                arr = f[y1:y2, x1:x2]
+                res['crop'] = [x1, y1, x2 - x1, y2 - y1]
         if path:
             from PIL import Image
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            Image.fromarray(f).save(path)
+            Image.fromarray(arr).save(path)
             res['path'] = path
         return res
 
@@ -966,6 +993,227 @@ def op(name):
     return deco
 
 
+# ------------------------------------------------------------- background mode
+# Watching and driving a window without touching the user's foreground: pixels
+# come from PrintWindow (a covered window still renders into the DC it is given)
+# and input goes through PostMessage (no cursor, no focus, no activation). Use it
+# when the machine is in use and the automation must stay out of the way.
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
+WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_CHAR, WM_KEYDOWN, WM_KEYUP = 0x020A, 0x020E, 0x0102, 0x0100, 0x0101
+WM_DOWN = {'left': WM_LBUTTONDOWN, 'right': WM_RBUTTONDOWN}
+WM_UP = {'left': WM_LBUTTONUP, 'right': WM_RBUTTONUP}
+WM_MK = {'left': 0x0001, 'right': 0x0002}
+
+
+def _lp(x, y) -> int:
+    """Pack a point into an LPARAM the way mouse messages want it."""
+    return ((int(y) & 0xFFFF) << 16) | (int(x) & 0xFFFF)
+
+
+def win_rect(hwnd) -> list:
+    """[x0, y0, x1, y1] of the window frame, in screen coordinates."""
+    r = wt.RECT()
+    if not ctypes.windll.user32.GetWindowRect(wt.HWND(int(hwnd)), ctypes.byref(r)):
+        raise OSError('GetWindowRect failed for hwnd %s' % hwnd)
+    return [int(r.left), int(r.top), int(r.right), int(r.bottom)]
+
+
+def to_client(hwnd, x, y) -> list:
+    """Screen point -> window client point (what posted mouse messages carry)."""
+    pt = wt.POINT(int(x), int(y))
+    ctypes.windll.user32.ScreenToClient(wt.HWND(int(hwnd)), ctypes.byref(pt))
+    return [int(pt.x), int(pt.y)]
+
+
+def client_rect(hwnd) -> list:
+    """[x0, y0, x1, y1] of the window's client area, in screen coordinates.
+
+    A window grab that is meant to look like the app's own surface (what an OCR
+    driver wants) must skip the frame: PrintWindow paints the active caption dark,
+    which merges with the app's own dark banner and ruins the row profile.
+    """
+    u = ctypes.windll.user32
+    r = wt.RECT()
+    if not u.GetClientRect(wt.HWND(int(hwnd)), ctypes.byref(r)):
+        raise OSError('GetClientRect failed for hwnd %s' % hwnd)
+    pt = wt.POINT(0, 0)
+    if not u.ClientToScreen(wt.HWND(int(hwnd)), ctypes.byref(pt)):
+        raise OSError('ClientToScreen failed for hwnd %s' % hwnd)
+    return [int(pt.x), int(pt.y), int(pt.x + r.right), int(pt.y + r.bottom)]
+
+
+def grab_window(hwnd, pw_flag: int = 2) -> np.ndarray:
+    """Window pixels through PrintWindow, even while it is covered.
+
+    Returns an RGB array whose (0, 0) is the window's top-left corner in screen
+    coordinates, so any screen-relative box can be sliced straight out of it.
+    pw_flag 2 is PW_RENDERFULLCONTENT (Win 8.1+), needed for composited windows;
+    0 is the plain fallback for windows that refuse the newer flag.
+    """
+    x0, y0, x1, y1 = win_rect(hwnd)
+    w, h = int(x1 - x0), int(y1 - y0)
+    if w <= 0 or h <= 0:
+        raise OSError('window %s has no area (%dx%d)' % (hwnd, w, h))
+    u, g = ctypes.windll.user32, ctypes.windll.gdi32
+    hw = wt.HWND(int(hwnd))
+    hdc = u.GetWindowDC(hw)
+    mem = g.CreateCompatibleDC(hdc)
+    bmp = g.CreateCompatibleBitmap(hdc, w, h)
+    old = g.SelectObject(mem, bmp)
+    try:
+        ok = u.PrintWindow(hw, mem, pw_flag)
+        if not ok and pw_flag != 0:
+            ok = u.PrintWindow(hw, mem, 0)
+        if not ok:
+            raise OSError('PrintWindow failed for hwnd %s' % hwnd)
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth, bmi.biHeight = w, -h          # negative: top-down rows
+        bmi.biPlanes, bmi.biBitCount = 1, 32
+        bmi.biCompression = 0                      # BI_RGB
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not g.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bmi), 0):
+            raise OSError('GetDIBits failed for hwnd %s' % hwnd)
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)[:, :, 2::-1]
+        return np.ascontiguousarray(arr)
+    finally:
+        g.SelectObject(mem, old)
+        g.DeleteObject(bmp)
+        g.DeleteDC(mem)
+        u.ReleaseDC(hw, hdc)
+
+
+def post_click(hwnd, x, y, button='left', n=1, gap_ms=60, hold_ms=20) -> dict:
+    """Click inside a window through PostMessage: no cursor move, no activation."""
+    u, hw = ctypes.windll.user32, wt.HWND(int(hwnd))
+    px, py = to_client(hwnd, x, y)
+    lp = _lp(px, py)
+    t0 = time.perf_counter()
+    u.PostMessageW(hw, WM_MOUSEMOVE, 0, lp)
+    for i in range(max(1, int(n))):
+        u.PostMessageW(hw, WM_DOWN[button], WM_MK[button], lp)
+        time.sleep(max(0.0, hold_ms / 1000.0))
+        u.PostMessageW(hw, WM_UP[button], 0, lp)
+        if i + 1 < max(1, int(n)):
+            time.sleep(max(0.0, gap_ms / 1000.0))
+    return {'at': [px, py], 'n': max(1, int(n)), 'how': 'postmessage',
+            'ms': round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def post_drag(hwnd, x1, y1, x2, y2, steps=20, ms=200, button='left') -> dict:
+    """Press, move, release - all posted, so a drag needs no foreground."""
+    u, hw = ctypes.windll.user32, wt.HWND(int(hwnd))
+    a, b = to_client(hwnd, x1, y1), to_client(hwnd, x2, y2)
+    t0 = time.perf_counter()
+    u.PostMessageW(hw, WM_MOUSEMOVE, 0, _lp(*a))
+    u.PostMessageW(hw, WM_DOWN[button], WM_MK[button], _lp(*a))
+    for i in range(1, max(2, int(steps)) + 1):
+        t = i / float(max(2, int(steps)))
+        pt = [int(round(a[0] + (b[0] - a[0]) * t)), int(round(a[1] + (b[1] - a[1]) * t))]
+        u.PostMessageW(hw, WM_MOUSEMOVE, WM_MK[button], _lp(*pt))
+        time.sleep(max(0.002, (ms / 1000.0) / max(2, int(steps))))
+    u.PostMessageW(hw, WM_UP[button], 0, _lp(*b))
+    return {'from': a, 'to': b, 'how': 'postmessage',
+            'ms': round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def post_text(hwnd, text: str) -> dict:
+    """Type into a window by posting WM_CHAR (works without focus or IME)."""
+    u, hw = ctypes.windll.user32, wt.HWND(int(hwnd))
+    t0 = time.perf_counter()
+    for ch in str(text):
+        u.PostMessageW(hw, WM_CHAR, ord(ch), 0)
+        time.sleep(0.012)
+    return {'n': len(str(text)), 'how': 'postmessage',
+            'ms': round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def focus_hwnd(hwnd) -> dict:
+    """Hand the keyboard focus to `hwnd` without activating it.
+
+    AttachThreadInput is what lets SetFocus cross the process boundary; Tk drops posted
+    keys unless it believes it is focused. A background driver wants this in the *same*
+    request as the post, not in an earlier call where a foreground window can take the
+    focus back in between.
+    """
+    u = ctypes.windll.user32
+    h = wt.HWND(int(hwnd))
+    tid_to = u.GetWindowThreadProcessId(h, None)
+    tid_me = ctypes.windll.kernel32.GetCurrentThreadId()
+    attached = False
+    if tid_to and tid_to != tid_me:
+        attached = bool(u.AttachThreadInput(wt.DWORD(tid_to), wt.DWORD(tid_me), True))
+    focused = False
+    try:
+        focused = bool(u.SetFocus(h))
+    finally:
+        if attached:
+            u.AttachThreadInput(wt.DWORD(tid_to), wt.DWORD(tid_me), False)
+    return {'focused': focused, 'focus_hwnd': int(u.GetFocus() or 0)}
+
+
+EXTENDED_KEYS = frozenset((0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E))
+
+
+def _key_lparam(u, vk: int, down: bool = True) -> int:
+    """lParam for WM_KEYDOWN/WM_KEYUP: repeat count 1, the *real* scan code, arrows/paging
+    marked extended. Posting 0 here is what makes Tk (and anything that translates the
+    message through the keyboard layout) report a printable key as `??`."""
+    sc = int(u.MapVirtualKeyW(int(vk), 0)) & 0xFF      # 0 = MAPVK_VK_TO_VSC
+    lp = 1 | (sc << 16)
+    if int(vk) in EXTENDED_KEYS:
+        lp |= 0x01000000
+    return lp if down else lp | 0xC0000000
+
+
+def post_key(hwnd, *names) -> dict:
+    """Post key presses (VK codes, no focus). Names come from the same VK table."""
+    u, hw = ctypes.windll.user32, wt.HWND(int(hwnd))
+    t0 = time.perf_counter()
+    for spec in names:
+        parts = [p.strip().lower() for p in str(spec).replace('+', ' ').split() if p.strip()]
+        raw = [VK[p] if p in VK else (ord(p.upper()) if len(p) == 1 else None) for p in parts]
+        if any(c is None for c in raw):
+            raise ValueError('unknown key %r' % spec)
+        codes = [c for c in raw if c is not None]
+        for c in codes:
+            u.PostMessageW(hw, WM_KEYDOWN, c, _key_lparam(u, c))
+        for c in reversed(codes):
+            u.PostMessageW(hw, WM_KEYUP, c, _key_lparam(u, c, down=False))
+    return {'keys': [str(n) for n in names], 'how': 'postmessage',
+            'ms': round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def post_scroll(hwnd, dy=0, dx=0) -> dict:
+    """Post wheel messages. dy/dx are raw deltas (one notch = 120), and the wheel
+    message wants *screen* coordinates in its lParam - not client ones."""
+    u, hw = ctypes.windll.user32, wt.HWND(int(hwnd))
+    x0, y0, x1, y1 = win_rect(hwnd)
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    t0 = time.perf_counter()
+    for delta, msg in ((dy, WM_MOUSEWHEEL), (dx, WM_MOUSEHWHEEL)):
+        if not delta:
+            continue
+        step = 120 if delta > 0 else -120
+        for _ in range(int(abs(delta) // 120)):
+            u.PostMessageW(hw, msg, _lp_signed(step << 16), _lp(cx, cy))
+    return {'dy': dy, 'dx': dx, 'how': 'postmessage',
+            'ms': round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def _lp_signed(v: int) -> int:
+    """A wParam that may carry a negative high word (wheel deltas)."""
+    return ctypes.c_uint32(v & 0xFFFFFFFF).value
+
+
+def bg_target(req) -> int | None:
+    """Resolve the background window for an input op, or None to use the cursor."""
+    if not req.get('bg'):
+        return None
+    return resolve_hwnd(req.get('hwnd'), req.get('title_contains') or req.get('front_title'))
+
+
 @op('ping')
 def o_ping(req):
     return {'ok': True, 'pid': os.getpid(), 'uptime_s': round(time.time() - A.t0, 1),
@@ -974,12 +1222,16 @@ def o_ping(req):
 
 @op('shot')
 def o_shot(req):
-    return dict(ok=True, **A.shot(req.get('path'), req.get('region')))
+    hwnd = req.get('hwnd') or (resolve_hwnd(0, req['title_contains'])
+                               if req.get('title_contains') else None)
+    return dict(ok=True, **A.shot(req.get('path'), req.get('region'), hwnd))
 
 
 @op('save')
 def o_save(req):
-    return dict(ok=True, **A.shot(req['path'], req.get('region')))
+    hwnd = req.get('hwnd') or (resolve_hwnd(0, req['title_contains'])
+                               if req.get('title_contains') else None)
+    return dict(ok=True, **A.shot(req['path'], req.get('region'), hwnd))
 
 
 @op('find')
@@ -1009,8 +1261,14 @@ def o_find(req):
 @op('click')
 def o_click(req):
     t0 = time.perf_counter()
-    fr = _maybe_front(req)
+    bg = bg_target(req)
     pos, how = resolve_target(req.get('target'), A, req.get('scope_hwnd'))
+    if bg:
+        r = post_click(bg, pos[0], pos[1], req.get('button', 'left'), int(req.get('n', 1)),
+                       req.get('gap_ms', 60))
+        return {'ok': True, 'at': pos, 'how': how, 'click': r, 'bg': int(bg),
+                'ms': round((time.perf_counter() - t0) * 1000, 1)}
+    fr = _maybe_front(req)
     r = A.hands.click(pos[0], pos[1], req.get('button', 'left'), int(req.get('n', 1)), req.get('gap_ms', 60),
                       req.get('ease', False), req.get('settle_ms', 25))
     out = {'ok': True, 'at': pos, 'how': how, 'click': r, 'ms': round((time.perf_counter() - t0) * 1000, 1)}
@@ -1021,11 +1279,17 @@ def o_click(req):
 
 @op('move')
 def o_move(req):
-    fr = _maybe_front(req)
+    bg = bg_target(req)
     if req.get('target'):
         pos, how = resolve_target(req['target'], A, req.get('scope_hwnd'))
     else:
         pos, how = [int(req['x']), int(req['y'])], {'how': 'xy'}
+    if bg:
+        px, py = to_client(bg, pos[0], pos[1])
+        ctypes.windll.user32.PostMessageW(wt.HWND(int(bg)), WM_MOUSEMOVE, 0, _lp(px, py))
+        return {'ok': True, 'at': pos, 'how': how, 'bg': int(bg),
+                'move': {'at': [px, py], 'how': 'postmessage'}}
+    fr = _maybe_front(req)
     out = {'ok': True, 'at': pos, 'how': how,
            'move': A.hands.move(pos[0], pos[1], req.get('dur_ms', 160), req.get('human', False))}
     if fr:
@@ -1035,7 +1299,7 @@ def o_move(req):
 
 @op('drag')
 def o_drag(req):
-    fr = _maybe_front(req)
+    bg = bg_target(req)
     if req.get('from'):
         p1, _ = resolve_target(req['from'], A, req.get('scope_hwnd'))
     else:
@@ -1044,6 +1308,11 @@ def o_drag(req):
         p2, _ = resolve_target(req['to'], A, req.get('scope_hwnd'))
     else:
         p2 = [int(req['x2']), int(req['y2'])]
+    if bg:
+        r = post_drag(bg, p1[0], p1[1], p2[0], p2[1], req.get('steps', 20), req.get('ms', 200),
+                      req.get('button', 'left'))
+        return {'ok': True, 'from': p1, 'to': p2, 'drag': r, 'bg': int(bg)}
+    fr = _maybe_front(req)
     r = A.hands.drag(p1[0], p1[1], p2[0], p2[1], req.get('steps', 30), req.get('ms', 240), req.get('button', 'left'))
     out = {'ok': True, 'from': p1, 'to': p2, 'drag': r}
     if fr:
@@ -1053,6 +1322,9 @@ def o_drag(req):
 
 @op('type')
 def o_type(req):
+    bg = bg_target(req)
+    if bg:
+        return {'ok': True, 'type': post_text(bg, req['text']), 'bg': int(bg)}
     fr = _maybe_front(req)
     out = dict(ok=True, **A.hands.type_text(req['text'], req.get('per_char_ms', 12), req.get('chunk', 0)))
     if fr:
@@ -1062,10 +1334,17 @@ def o_type(req):
 
 @op('key')
 def o_key(req):
-    fr = _maybe_front(req)
     keys = req.get('keys') or [req['key']]
     if isinstance(keys, str):
         keys = [keys]
+    bg = bg_target(req)
+    if bg:
+        # focus and post in the *same* request. Handing the focus over in an earlier call
+        # leaves an IPC gap of tens of milliseconds in which any foreground window can
+        # take it back - and a key posted into that gap is dropped by Tk, silently.
+        fx = focus_hwnd(bg) if req.get('focus') else {}
+        return {'ok': True, 'key': post_key(bg, *keys), 'bg': int(bg), **fx}
+    fr = _maybe_front(req)
     out = dict(ok=True, **A.hands.key(*keys))
     if fr:
         out['front'] = fr
@@ -1074,6 +1353,10 @@ def o_key(req):
 
 @op('scroll')
 def o_scroll(req):
+    bg = bg_target(req)
+    if bg:
+        return {'ok': True, 'scroll': post_scroll(bg, req.get('dy', 0), req.get('dx', 0)),
+                'bg': int(bg)}
     return dict(ok=True, **A.hands.scroll(req.get('dy', 0), req.get('dx', 0)))
 
 
@@ -1135,11 +1418,20 @@ def o_window(req):
       {"op":"window","mode":"front","hwnd":123}      raise + activate (once)
       {"op":"window","mode":"top","hwnd":123}        pin TOPMOST (while working)
       {"op":"window","mode":"untop","hwnd":123}      unpin
-      {"op":"window","mode":"info","hwnd":123}       rect/visible/iconic/foreground
+      {"op":"window","mode":"info","hwnd":123}       rect/client/visible/iconic/foreground
+      {"op":"window","mode":"foreground"}            which window is in front right now
+      {"op":"window","mode":"bottom","hwnd":123}     push behind everything, keep focus
       max | min | restore | close | move(x,y,w,h) | title_contains:"计算器"
     """
     u = ctypes.windll.user32
     mode = req.get('mode', 'front')
+    if mode == 'foreground':
+        # the honest way to show that an automation run never stole the user's
+        # foreground: ask before and after instead of asserting it
+        fg = int(u.GetForegroundWindow())
+        buf = ctypes.create_unicode_buffer(512)
+        u.GetWindowTextW(wt.HWND(fg), buf, 512)
+        return {'ok': True, 'mode': 'foreground', 'foreground': fg, 'title': buf.value}
     hwnd = int(req.get('hwnd') or 0)
     if not hwnd and req.get('title_contains'):
         hwnd = resolve_hwnd(title_contains=req['title_contains'], limit=80, timeout=4.0)
@@ -1153,6 +1445,10 @@ def o_window(req):
         u.GetWindowTextW(wt.HWND(hwnd), buf, 512)
         return dict(hwnd=hwnd, title=buf.value,
                     rect=[r.left, r.top, r.right, r.bottom],
+                    # the client area is what a window grab hands back, so callers that
+                    # map image points to the screen need it: without it they measure
+                    # from the frame and every click lands (border, caption) off target.
+                    client=(client_rect(hwnd) if u.IsWindow(wt.HWND(hwnd)) else None),
                     visible=bool(u.IsWindowVisible(wt.HWND(hwnd))),
                     iconic=bool(u.IsIconic(wt.HWND(hwnd))),
                     foreground=int(u.GetForegroundWindow()),
@@ -1183,6 +1479,18 @@ def o_window(req):
         after = -1 if mode == 'top' else -2                         # HWND_TOPMOST / HWND_NOTOPMOST
         u.SetWindowPos(wt.HWND(hwnd), wt.HWND(after), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
         return {'ok': True, 'mode': mode, **info()}
+    if mode == 'bottom':
+        # push the window behind everything without touching the user's focus - the
+        # other half of a background workflow, where the target is never raised
+        u.SetWindowPos(wt.HWND(hwnd), wt.HWND(1), 0, 0, 0, 0,              # HWND_BOTTOM
+                       0x0001 | 0x0002 | 0x0010)                           # NOSIZE|NOMOVE|NOACTIVATE
+        return {'ok': True, 'mode': 'bottom', **info()}
+
+    if mode == 'focus':
+        # hand the keyboard focus to the window *inside its own thread* without making
+        # it the foreground window: Tk drops posted keys unless it believes it is
+        # focused, and AttachThreadInput lets SetFocus cross the process boundary
+        return {'ok': True, 'mode': 'focus', **focus_hwnd(hwnd), **info()}
 
     # front: un-minimise, pin topmost, attach to the foreground thread queue so
     # SetForegroundWindow is allowed, activate, then drop topmost again.
@@ -1344,6 +1652,7 @@ def _win_info(hwnd):
     u.GetWindowThreadProcessId(wt.HWND(hwnd), ctypes.byref(pid))
     return {'hwnd': hwnd, 'title': buf.value, 'cls': cls.value,
             'rect': [int(r.left), int(r.top), int(r.right), int(r.bottom)],
+            'client': (client_rect(hwnd) if u.IsWindow(hwnd) else None),
             'pid': int(pid.value), 'visible': bool(u.IsWindowVisible(wt.HWND(hwnd)))}
 
 
