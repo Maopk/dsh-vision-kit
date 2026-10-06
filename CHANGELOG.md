@@ -186,6 +186,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Changed
 
+- `README.zh-CN.md` is back in step with the English README, which stays the authority. The latency
+  table now carries the same numbers the English one does — windows **48 ms**, colour blobs
+  **102 ms**, template match **83 ms**, click **33–46 ms** with the old easing path named at 120 ms,
+  whole skill **0.62–0.72 s** warm — instead of the superseded 41 / 110 / 91 / ~120 ms / 0.62 s, and
+  the three rows that were missing are translated: macro replay **0.30 s** in one call, replay with a
+  `launch` first step **2.6 s + 0.22 s** from a cold desktop, and `capture` turning **4 raw clicks
+  into 4 UIA selectors** (demo 0.23 s, replayed in 0.30 s). The two narrative paragraphs behind those
+  rows are translated as well: what `"record"` writes and how `{{arg}}` / `as:` turn a recorded run
+  into a template, and the `capture start` … `capture stop` demonstration path. A section-by-section
+  diff of the two files put the entire gap in this one section — the other seven are already in sync
+  — and confirmed that the English numbers are the measured ones (`actor/README.md`, plus the 1.3.0
+  entry that replaced 41 / 110 / 91 / ~120), so the Chinese table was the stale side, not the English
+  one. One deliberate difference stays: the Chinese tesseract row quotes the text it read
+  (「本月预算 ¥2.1346 / ¥100 余额 ¥107.17」) where the English row only says "reads it with no
+  preprocessing". Prototype check after this change: **no number appears in the English README that
+  the Chinese one lacks**.
+
 - The front door now answers its three questions before the reader scrolls. **Why**: a new
   `## Why this exists` / `## 为什么有这个仓库` section states the actual problem (the loop, not
   recognition), who needs it and the prerequisite (an interactive Windows desktop, not a headless
